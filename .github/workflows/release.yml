@@ -17,6 +17,8 @@ jobs:
           bun-version: "1.3.6"
       - run: bun install --frozen-lockfile
       - run: bun test
+      - name: Check installer syntax
+        run: sh -n install.sh && dash -n install.sh
       - name: Build single-file binaries
         run: |
           mkdir -p out
@@ -24,8 +26,55 @@ jobs:
             ext=""; [ "$target" = "windows-x64" ] && ext=".exe"
             bun build src/cli.ts --compile --minify --target="bun-$target" --outfile "out/diffward-$target$ext"
           done
-          cd out && sha256sum diffward-* > SHA256SUMS
+          cp install.sh install.ps1 out/
+          cd out && sha256sum diffward-* install.sh install.ps1 > SHA256SUMS
+      - name: Write release notes header
+        run: |
+          tag="$GITHUB_REF_NAME"; repo="$GITHUB_REPOSITORY"
+          {
+            echo "## Install"
+            echo
+            echo "**macOS / Linux**"
+            echo '```sh'
+            echo "curl -fsSL https://github.com/$repo/releases/download/$tag/install.sh | sh"
+            echo '```'
+            echo
+            echo "**Windows (PowerShell)**"
+            echo '```powershell'
+            echo "irm https://github.com/$repo/releases/download/$tag/install.ps1 | iex"
+            echo '```'
+            echo
+            echo "**GitHub Actions**: \`uses: $repo@v0\` (see the [README](https://github.com/$repo#github-actions))."
+            echo
+            echo "Every file is listed in \`SHA256SUMS\`; the installers verify the binary against it."
+          } > notes.md
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" out/* --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" out/* --notes-file notes.md --generate-notes --verify-tag
+
+  # Install the release that was just published, the way users will.
+  installer-smoke:
+    needs: binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install with install.sh
+        if: runner.os != 'Windows'
+        env:
+          DIFFWARD_VERSION: ${{ github.ref_name }}
+        run: |
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh" | sh
+          test "v$("$HOME/.local/bin/diffward" --version)" = "$GITHUB_REF_NAME"
+      - name: Install with install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DIFFWARD_VERSION: ${{ github.ref_name }}
+        run: |
+          irm "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/install.ps1" | iex
+          $v = & "$env:LOCALAPPDATA\diffward\bin\diffward.exe" --version
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "installed $v, expected $env:GITHUB_REF_NAME" }

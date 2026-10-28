@@ -6,10 +6,9 @@ set -eu
 TARGET_BRANCH="${TARGET_BRANCH:-main}"
 git fetch --quiet origin "$TARGET_BRANCH"
 
-# Single self-contained binary; pick the asset for your runner
-# (linux-x64, linux-arm64, darwin-arm64, darwin-x64, windows-x64.exe).
-curl -fsSL -o diffward https://github.com/MarcosRTech/diffward/releases/latest/download/diffward-linux-x64
-chmod +x diffward
+# Installs the binary for this runner's OS/CPU into the current directory,
+# verified against the release's SHA256SUMS. Pin with DIFFWARD_VERSION=v0.2.0.
+curl -fsSL https://github.com/MarcosRTech/diffward/releases/latest/download/install.sh | DIFFWARD_INSTALL_DIR=. sh
 
 ./diffward --diff "origin/$TARGET_BRANCH" --fail-on high --sarif diffward.sarif
 

@@ -39,13 +39,31 @@ Old problems already on `main` don't block the PR; new ones do. Results come as 
 
 ## Quick start
 
-Download the single self-contained binary for your platform (no Node.js or Bun needed) from the [latest release](https://github.com/MarcosRTech/diffward/releases/latest):
+Install the single self-contained binary (no Node.js or Bun needed):
 
 ```sh
-# Linux x64 — also: linux-arm64, darwin-arm64, darwin-x64, windows-x64.exe
-curl -fsSL -o diffward https://github.com/MarcosRTech/diffward/releases/latest/download/diffward-linux-x64
-chmod +x diffward && sudo mv diffward /usr/local/bin/
+# macOS / Linux
+curl -fsSL https://github.com/MarcosRTech/diffward/releases/latest/download/install.sh | sh
 ```
+
+```powershell
+# Windows (PowerShell)
+irm https://github.com/MarcosRTech/diffward/releases/latest/download/install.ps1 | iex
+```
+
+The installer detects your OS and CPU, downloads the matching binary with a progress bar, verifies it against the release's `SHA256SUMS`, installs it to `~/.local/bin` (Windows: `%LOCALAPPDATA%\diffward\bin`) and tells you if that directory is missing from your `PATH`. Running it again updates diffward. Options: `DIFFWARD_VERSION=v0.2.0` pins a version, `DIFFWARD_INSTALL_DIR=...` changes the destination, `DIFFWARD_FORCE=1` reinstalls. In CI it prints plain progress lines instead of a redrawn bar.
+
+```text
+[1/4] Detecting your system
+      System     macOS 26.1 · arm64
+      Version    v0.2.0 (latest)
+
+[2/4] Downloading
+      Package    diffward-darwin-arm64 (58.4 MB)
+      ██████████████████░░░░░░░░░░░░  61%  35.6 MB / 58.4 MB  11.2 MB/s
+```
+
+Prefer to do it by hand? Every binary is on the [releases page](https://github.com/MarcosRTech/diffward/releases/latest) (`diffward-<linux|darwin>-<x64|arm64>`, `diffward-windows-x64.exe`) next to `SHA256SUMS`.
 
 Then, inside a repository:
 
@@ -110,7 +128,7 @@ diffward only needs a checkout with the target branch fetched. See [`examples/`]
 
 ```sh
 git fetch origin main
-curl -fsSL -o diffward https://github.com/MarcosRTech/diffward/releases/latest/download/diffward-linux-x64 && chmod +x diffward
+curl -fsSL https://github.com/MarcosRTech/diffward/releases/latest/download/install.sh | DIFFWARD_INSTALL_DIR=. sh
 ./diffward --diff origin/main --fail-on high --sarif diffward.sarif
 ```
 
