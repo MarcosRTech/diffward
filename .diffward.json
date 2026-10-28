@@ -1,0 +1,4 @@
+{
+  // Test fixtures are intentionally vulnerable.
+  "ignorePaths": ["tests/fixtures/"]
+}

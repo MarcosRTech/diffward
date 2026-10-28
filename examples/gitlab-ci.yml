@@ -1,0 +1,15 @@
+# .gitlab-ci.yml
+diffward:
+  image: oven/bun:1.3.6
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - bunx diffward --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --fail-on high --format markdown -o diffward.md --sarif gl-diffward.sarif
+  after_script:
+    - cat diffward.md
+  artifacts:
+    when: always
+    paths: [diffward.md, gl-diffward.sarif]

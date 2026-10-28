@@ -1,0 +1,8 @@
+# pinned
+Django==3.2.0
+requests[security]==2.25.1 ; python_version >= "3.6"
+PyYAML===5.3
+flask>=2.0  # not pinned, cannot be checked
+-r other.txt
+--index-url https://pypi.org/simple
+Some_Package.Name==1.0  # comment

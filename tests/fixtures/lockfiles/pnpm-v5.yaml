@@ -1,0 +1,10 @@
+lockfileVersion: 5.4
+
+packages:
+
+  /lodash/4.17.20:
+    resolution: {integrity: sha512-y}
+    dev: false
+
+  /@babel/core/7.22.5_react@18.2.0:
+    resolution: {integrity: sha512-x}

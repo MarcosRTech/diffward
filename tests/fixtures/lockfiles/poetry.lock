@@ -1,0 +1,15 @@
+[[package]]
+name = "Jinja2"
+version = "2.10"
+description = "A very fast and expressive template engine."
+optional = false
+
+[package.dependencies]
+MarkupSafe = ">=0.23"
+
+[[package]]
+name = "markupsafe"
+version = "1.1.1"
+
+[metadata]
+lock-version = "2.0"
