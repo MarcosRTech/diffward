@@ -7,6 +7,7 @@ import { RULES } from "./code/rules.ts";
 import { loadConfig } from "./config.ts";
 import { createOsvClient, DEFAULT_OSV_URL } from "./deps/osv.ts";
 import { gitRoot } from "./diff.ts";
+import { banner, TAGLINE } from "./logo.ts";
 import { failed, type Policy, type Threshold } from "./policy.ts";
 import { toMarkdown } from "./report/markdown.ts";
 import { toSarif } from "./report/sarif.ts";
@@ -15,7 +16,7 @@ import { scan, type ScanResult } from "./scan.ts";
 import { isSeverity } from "./types.ts";
 import { VERSION } from "./version.ts";
 
-const HELP = `diffward ${VERSION} — security scanner for pull requests
+const HELP = `diffward ${VERSION} — ${TAGLINE.toLowerCase()}
 
 Usage:
   diffward [scan] [path] [options]
@@ -94,7 +95,10 @@ async function main(argv: string[]): Promise<number> {
   });
 
   if (values.help) {
-    process.stdout.write(HELP);
+    const tty = Boolean(process.stdout.isTTY);
+    const utf8 = process.platform === "win32" || /utf-?8/i.test(process.env.LC_ALL ?? process.env.LC_CTYPE ?? process.env.LANG ?? "");
+    const color = tty && !values["no-color"] && !process.env.NO_COLOR;
+    process.stdout.write(banner({ tty, utf8, color }) + HELP);
     return 0;
   }
   if (values.version) {

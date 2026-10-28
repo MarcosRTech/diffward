@@ -28,13 +28,20 @@ function Format-Size([double]$bytes) {
   if ($i -eq 0) { "{0} {1}" -f [int]$bytes, $units[$i] } else { "{0:N1} {1}" -f $bytes, $units[$i] }
 }
 
-Write-Host @"
-     _  _   __   __                             _
-  __| |(_) / _| / _|__      __  __ _  _ __   __| |
- / _`` || || |_ | |_ \ \ /\ / / / _`` || '__| / _`` |
-| (_| || ||  _||  _| \ V  V / | (_| || |   | (_| |
- \__,_||_||_|  |_|    \_/\_/   \__,_||_|    \__,_|
-"@ -ForegroundColor Cyan
+# The logo is kept ASCII in this file (PowerShell 5.1 may decode a downloaded
+# script as Latin-1) and turned into box-drawing characters at runtime.
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+$logo = @'
+@@@@@@} @@}@@@@@@@}@@@@@@@}@@}    @@} @@@@@} @@@@@@} @@@@@@}
+@@{==@@}@@!@@{====]@@{====]@@!    @@!@@{==@@}@@{==@@}@@{==@@}
+@@!  @@!@@!@@@@@}  @@@@@}  @@! @} @@!@@@@@@@!@@@@@@{]@@!  @@!
+@@!  @@!@@!@@{==]  @@{==]  @@!@@@}@@!@@{==@@!@@{==@@}@@!  @@!
+@@@@@@{]@@!@@!     @@!     [@@@{@@@{]@@!  @@!@@!  @@!@@@@@@{]
+[=====] [=][=]     [=]      [==][==] [=]  [=][=]  [=][=====]
+'@
+$glyphs = @{ "@" = 0x2588; "{" = 0x2554; "}" = 0x2557; "[" = 0x255A; "]" = 0x255D; "=" = 0x2550; "!" = 0x2551 }
+foreach ($k in $glyphs.Keys) { $logo = $logo.Replace($k, [string][char]$glyphs[$k]) }
+Write-Host $logo -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Security scanner for pull requests " -NoNewline
 Write-Host "- installer" -ForegroundColor DarkGray
