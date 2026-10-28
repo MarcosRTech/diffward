@@ -27,8 +27,12 @@ app.get("/users", async (req, res) => {
   await db.execute(`SELECT * FROM users WHERE id = $1`, [id]);
 
   const table = "users";
-  // ruleid: js/sql-injection medium
+  // ok: js/sql-injection
   await db.query(`SELECT count(*) FROM ${table} WHERE active = 1`);
+
+  const column = pickColumn();
+  // ruleid: js/sql-injection medium
+  await db.query(`SELECT ${column} FROM users WHERE active = 1`);
 
   // ruleid: js/command-injection critical
   exec(`git log --author=${req.query.author}`);
@@ -89,9 +93,29 @@ export function backup(dbName: string) {
 declare const trx: any;
 export function byIds(column: string, ids: number[]) {
   // Placeholders built dynamically, values bound separately.
+  // ok: js/sql-injection
+  await trx.raw(`SELECT * FROM items WHERE ?? IN (${ids.map(() => "?").join(", ")})`, [column, ...ids]);
+  // ok: js/sql-injection
+  await trx.raw(`SELECT * FROM items WHERE id IN (${ids.map((_, i) => `$${i + 1}`).join(", ")})`, ids);
+  // Bindings present but a caller-supplied identifier in the SQL text: stays medium.
   // ruleid: js/sql-injection medium
-  return trx.raw(`SELECT * FROM items WHERE ?? IN (${ids.map(() => "?").join(", ")})`, [column, ...ids]);
+  return trx.raw(`SELECT * FROM items ORDER BY ${column} LIMIT ?`, [10]);
 }
+
+export async function byKeys(keys: string[]) {
+  const quoted = keys.map((key) => `"${key}"`).join(",");
+  // Looks like a placeholder list, but it interpolates the values themselves.
+  // ruleid: js/sql-injection high
+  return prisma.$queryRawUnsafe(`SELECT id FROM statements WHERE pix_key IN (${quoted})`);
+}
+
+const STATUS_FILTER = "status <> 'deleted'";
+export function listItems() {
+  // ok: js/sql-injection
+  return db.query(`SELECT * FROM items WHERE ${STATUS_FILTER}`);
+}
+
+declare function pickColumn(): string;
 
 // ok: js/code-injection
 Function("r", "regeneratorRuntime = r")(globalThis);

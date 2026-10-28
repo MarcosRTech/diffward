@@ -37,7 +37,16 @@ interface VarInfo {
   /** Initializer is a non-constant string (template with substitutions / concatenation). */
   dynamicString: boolean;
   sqlLike: boolean;
+  /** `const X = "literal"` (or built only from other constants). */
+  constant?: boolean;
+  /** Named like a request object (`request`, `event`...) but typed as something else. */
+  notRequest?: boolean;
 }
+
+/** I/O calls: their result is data from our own backend/DB, not the caller's input. */
+const IO_CALLS =
+  /^(?:fetch|get|post|put|patch|delete|head|request|query|execute|send|invoke|findOne|findMany|findUnique|findFirst|findAll|create|update|upsert)$/;
+const REQUEST_TYPE = /Request|Req\b|Context|Ctx|Event|Incoming|NextApi|^\s*(?:any|unknown)\s*$/;
 
 class JsAnalyzer {
   private findings: RawFinding[] = [];
@@ -49,6 +58,10 @@ class JsAnalyzer {
 
   run(): RawFinding[] {
     this.collectImports();
+    // Module-level constants may be declared below the functions that use them.
+    for (const st of this.sf.statements) {
+      if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) if (d.initializer) this.onVariable(d, d.initializer);
+    }
     this.visit(this.sf);
     return this.findings;
   }
@@ -149,7 +162,7 @@ class JsAnalyzer {
     const recurse = (e: ts.Node | undefined) => this.reaches(e, field);
     if (ts.isIdentifier(expr)) return this.lookup(expr.text)?.[field] ?? false;
     if (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
-      if (field === "tainted" && isRequestSource(expr)) return true;
+      if (field === "tainted" && isRequestSource(expr) && !this.isPlainObject(expr)) return true;
       return recurse(expr.expression);
     }
     if (ts.isCallExpression(expr)) {
@@ -157,12 +170,13 @@ class JsAnalyzer {
       const last = callee.split(".").pop() ?? "";
       if (SANITIZERS.has(last)) return false;
       // searchParams.get("x"), formData.get("x"), req.param("x"), req.get("x"), await req.json()
-      if (field === "tainted" && ts.isPropertyAccessExpression(expr.expression)) {
+      if (field === "tainted" && ts.isPropertyAccessExpression(expr.expression) && !this.isPlainObject(expr.expression)) {
         const obj = expr.expression.expression;
         const method = expr.expression.name.text;
         if (/^(?:get|getAll)$/.test(method) && /(?:searchParams|query|formData|params|headers)$/i.test(dotted(obj))) return true;
         if (/^(?:param|get|header|json|text|formData)$/.test(method) && REQUEST_OBJECTS.test(dotted(obj))) return true;
       }
+      if (IO_CALLS.test(last)) return recurse(expr.expression);
       return expr.arguments.some(recurse) || recurse(expr.expression);
     }
     if (ts.isTemplateExpression(expr)) return expr.templateSpans.some((s) => recurse(s.expression));
@@ -190,13 +204,36 @@ class JsAnalyzer {
     return false;
   }
 
+  /** `request.url` where `request` is a local typed as something other than an HTTP request. */
+  private isPlainObject(expr: ts.Expression): boolean {
+    const root = dotted(expr).split(".")[0];
+    return root ? (this.lookup(root)?.notRequest ?? false) : false;
+  }
+
+  /** Literals, `const` identifiers bound to literals, and expressions built only from those. */
+  private isConstExpr(expr: ts.Expression): boolean {
+    expr = unwrap(expr);
+    if (isConstString(expr)) return true;
+    if (ts.isIdentifier(expr)) return this.lookup(expr.text)?.constant ?? false;
+    if (ts.isPropertyAccessExpression(expr)) {
+      // ENUM.MEMBER / CONSTANTS.KEY in SCREAMING_CASE
+      return /^[A-Z][A-Z0-9_]*$/.test(expr.name.text) && /^[A-Z][A-Za-z0-9_]*$/.test(dotted(expr.expression));
+    }
+    if (ts.isTemplateExpression(expr)) return expr.templateSpans.every((s) => this.isConstExpr(s.expression));
+    if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      return this.isConstExpr(expr.left) && this.isConstExpr(expr.right);
+    }
+    if (ts.isConditionalExpression(expr)) return this.isConstExpr(expr.whenTrue) && this.isConstExpr(expr.whenFalse);
+    return isPlaceholderList(expr);
+  }
+
   /** A string whose value is not a compile-time constant. */
   private isDynamicString(expr: ts.Expression | undefined): boolean {
     if (!expr) return false;
     expr = unwrap(expr);
-    if (ts.isTemplateExpression(expr)) return true;
+    if (ts.isTemplateExpression(expr)) return !this.isConstExpr(expr);
     if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      return !(isConstString(expr.left) && isConstString(expr.right));
+      return !this.isConstExpr(expr);
     }
     if (ts.isIdentifier(expr)) return this.lookup(expr.text)?.dynamicString ?? false;
     if (ts.isCallExpression(expr) && ts.isPropertyAccessExpression(expr.expression)) {
@@ -219,7 +256,7 @@ class JsAnalyzer {
     if (opensScope && !ts.isSourceFile(node)) this.scopes.push(new Map());
 
     if (ts.isFunctionLike(node)) this.bindHandlerParams(node);
-    if (ts.isVariableDeclaration(node) && node.initializer) this.onVariable(node.name, node.initializer);
+    if (ts.isVariableDeclaration(node) && node.initializer) this.onVariable(node, node.initializer);
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) this.onAssignment(node);
     if (ts.isCallExpression(node)) this.onCall(node);
     if (ts.isNewExpression(node)) this.onNew(node);
@@ -233,7 +270,9 @@ class JsAnalyzer {
   /** Parameters are caller-controlled; destructured request parts are request data. */
   private bindHandlerParams(fn: ts.SignatureDeclaration) {
     for (const p of fn.parameters) {
-      this.bindPattern(p.name, { tainted: false, param: true, dynamicString: false, sqlLike: false });
+      const typed = p.type && !REQUEST_TYPE.test(p.type.getText(this.sf));
+      const notRequest = ts.isIdentifier(p.name) && REQUEST_OBJECTS.test(p.name.text) && Boolean(typed);
+      this.bindPattern(p.name, { tainted: false, param: true, dynamicString: false, sqlLike: false, notRequest });
       // Destructured request parts: ({ body, query, params }) => ...
       if (ts.isObjectBindingPattern(p.name) && fn.parameters.length <= 3) {
         for (const el of p.name.elements) {
@@ -246,12 +285,15 @@ class JsAnalyzer {
     }
   }
 
-  private onVariable(name: ts.BindingName, init: ts.Expression) {
+  private onVariable(decl: ts.VariableDeclaration, init: ts.Expression) {
+    const name = decl.name;
+    const isConst = ts.isVariableDeclarationList(decl.parent) && (decl.parent.flags & ts.NodeFlags.Const) !== 0;
     const info: VarInfo = {
       tainted: this.isTainted(init),
       param: this.fromParam(init),
       dynamicString: this.isDynamicString(init),
       sqlLike: SQL_KEYWORDS.test(init.getText(this.sf)),
+      constant: isConst && ts.isIdentifier(name) && this.isConstExpr(init),
     };
     this.bindPattern(name, info);
     if (ts.isIdentifier(name)) this.checkInsecureRandom(name.text, init);
@@ -546,6 +588,31 @@ function isConstString(e: ts.Expression): boolean {
     return isConstString(e.left) && isConstString(e.right);
   }
   return false;
+}
+
+/**
+ * Placeholder lists for bound parameters: `ids.map(() => "?").join(", ")`,
+ * `ids.map((_, i) => `$${i + 1}`).join()`, `Array(n).fill("?").join()`.
+ */
+function isPlaceholderList(e: ts.Expression): boolean {
+  e = unwrap(e);
+  if (!ts.isCallExpression(e) || !ts.isPropertyAccessExpression(e.expression) || e.expression.name.text !== "join") return false;
+  const inner = unwrap(e.expression.expression);
+  if (!ts.isCallExpression(inner) || !ts.isPropertyAccessExpression(inner.expression)) return false;
+  const method = inner.expression.name.text;
+  const arg = inner.arguments[0];
+  if (method === "fill") return Boolean(arg && isConstString(arg));
+  if (method !== "map" || !arg || !(ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))) return false;
+  const body = ts.isArrowFunction(arg) && !ts.isBlock(arg.body) ? unwrap(arg.body) : undefined;
+  if (!body) return false;
+  if (isConstString(body)) return true;
+  // `$${i + 1}` / `:p${i}` — a fixed prefix plus the index (never the element itself)
+  const index = arg.parameters[1]?.name;
+  if (!index || !ts.isIdentifier(index) || !ts.isTemplateExpression(body)) return false;
+  return body.templateSpans.every((s) => {
+    const words = s.expression.getText().match(/[A-Za-z_$][\w$]*/g) ?? [];
+    return /^[\w\s+]+$/.test(s.expression.getText()) && words.every((w) => w === index.text);
+  });
 }
 
 /** `https://api.example.com/${id}` keeps a fixed origin, so it is not SSRF / open redirect. */

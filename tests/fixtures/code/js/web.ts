@@ -73,3 +73,16 @@ export function render(el: HTMLElement, comment: { body: string }, name: string)
   // ruleid: js/xss
   document.write("<p>" + name + "</p>");
 }
+
+// A parameter named `request` that is not an HTTP request.
+export async function callPartner(request: { url: string; body: unknown }) {
+  // ok: js/ssrf
+  return axios.request({ url: request.url, data: request.body });
+}
+
+// Data returned by our own backend is not the caller's input.
+export async function renderPdf(req: Request) {
+  const generated = await axios.post("https://pdf.internal.example/generate", req.body);
+  // ok: js/ssrf
+  return axios.get(generated.data.url);
+}
