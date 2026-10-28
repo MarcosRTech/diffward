@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*.*.*"] # the moving major tag (v0) used by the Action does not release
 
 permissions:
   contents: write

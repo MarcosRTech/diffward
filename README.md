@@ -1,7 +1,7 @@
 # diffward
 
 ```console
-$ npx diffward --diff origin/main
+$ diffward --diff origin/main
 
  CRITICAL  js/sql-injection src/routes/users.ts:42:9
   SQL query built from dynamic strings (query()).
@@ -26,14 +26,24 @@ Old problems already on `main` don't block the PR; new ones do. Results come as 
 
 ## Quick start
 
+Download the single self-contained binary for your platform (no Node.js or Bun needed) from the [latest release](https://github.com/MarcosRTech/diffward/releases/latest):
+
 ```sh
-npx diffward                          # full scan of the current repository
-npx diffward --diff origin/main       # only what this branch introduces (incl. uncommitted edits)
-npx diffward --diff origin/main --fail-on critical --sarif diffward.sarif
-git diff main... | npx diffward --diff-file -   # from a patch, no git history needed
+# Linux x64 — also: linux-arm64, darwin-arm64, darwin-x64, windows-x64.exe
+curl -fsSL -o diffward https://github.com/MarcosRTech/diffward/releases/latest/download/diffward-linux-x64
+chmod +x diffward && sudo mv diffward /usr/local/bin/
 ```
 
-Also available as `bunx diffward`, or as a single self-contained binary (Linux, macOS, Windows) from the [releases page](https://github.com/MarcosRTech/diffward/releases) — no Node.js or Bun required.
+Then, inside a repository:
+
+```sh
+diffward                          # full scan of the current repository
+diffward --diff origin/main       # only what this branch introduces (incl. uncommitted edits)
+diffward --diff origin/main --fail-on critical --sarif diffward.sarif
+git diff main... | diffward --diff-file -   # from a patch, no git history needed
+```
+
+With [Bun](https://bun.sh) you can also run it from source: `git clone https://github.com/MarcosRTech/diffward && cd diffward && bun install && bun src/cli.ts <path>`.
 
 ## GitHub Actions
 
@@ -85,7 +95,8 @@ diffward only needs a checkout with the target branch fetched. See [`examples/`]
 
 ```sh
 git fetch origin main
-npx diffward --diff origin/main --fail-on high --sarif diffward.sarif
+curl -fsSL -o diffward https://github.com/MarcosRTech/diffward/releases/latest/download/diffward-linux-x64 && chmod +x diffward
+./diffward --diff origin/main --fail-on high --sarif diffward.sarif
 ```
 
 GitLab can ingest the SARIF file, and Azure DevOps, Jenkins (Warnings NG) and SonarQube read SARIF too.

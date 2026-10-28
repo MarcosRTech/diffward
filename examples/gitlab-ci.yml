@@ -1,13 +1,16 @@
 # .gitlab-ci.yml
 diffward:
-  image: oven/bun:1.3.6
+  image: debian:stable-slim # the release binary needs glibc
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
     GIT_DEPTH: 0
   script:
+    - apt-get update -qq && apt-get install -yqq --no-install-recommends git curl ca-certificates
+    - curl -fsSL -o /usr/local/bin/diffward https://github.com/MarcosRTech/diffward/releases/latest/download/diffward-linux-x64
+    - chmod +x /usr/local/bin/diffward
     - git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    - bunx diffward --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --fail-on high --format markdown -o diffward.md --sarif gl-diffward.sarif
+    - diffward --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --fail-on high --format markdown -o diffward.md --sarif gl-diffward.sarif
   after_script:
     - cat diffward.md
   artifacts:
