@@ -12,7 +12,7 @@ jobs:
   diffward:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # diffward needs the base commit to compute the diff
 
@@ -24,7 +24,7 @@ jobs:
       # Inline alerts on the PR via GitHub Code Scanning.
       # Free for public repositories; private ones need GitHub Advanced Security.
       # Without it, delete this step: the job summary and exit code still work.
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always() && steps.diffward.outputs.sarif-file != ''
         with:
           sarif_file: ${{ steps.diffward.outputs.sarif-file }}

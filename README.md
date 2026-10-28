@@ -60,7 +60,7 @@ jobs:
   diffward:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # needed to find the PR's merge-base
 
@@ -69,7 +69,7 @@ jobs:
         with:
           fail-on: high
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always() && steps.diffward.outputs.sarif-file != ''
         with:
           sarif_file: ${{ steps.diffward.outputs.sarif-file }}
