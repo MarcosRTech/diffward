@@ -40,3 +40,29 @@ jobs:
         with:
           sarif_file: ${{ steps.diffward.outputs.sarif-file }}
           category: diffward
+
+  # The installers in this commit, against the latest published release, so
+  # installer changes are exercised before they ship.
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: install.sh
+        if: runner.os != 'Windows'
+        run: |
+          sh install.sh | tee install.log
+          "$HOME/.local/bin/diffward" --version
+          # non-interactive output: milestone lines, never a redrawn bar
+          test "$(grep -c '% (' install.log)" -le 3
+      - name: install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./install.ps1 *>&1 | Tee-Object -Variable log
+          & "$env:LOCALAPPDATA\diffward\bin\diffward.exe" --version
+          $progress = @($log | Where-Object { "$_" -match '\d+%' }).Count
+          if ($progress -gt 3) { throw "expected at most 3 progress lines in CI, got $progress" }

@@ -108,21 +108,27 @@ try {
   $watch = [Diagnostics.Stopwatch]::StartNew()
   $lastDraw = -1
   $width = 30
+  # CI logs turn every `r redraw into a new line: print a line every 25% there instead.
+  $interactive = -not [Console]::IsOutputRedirected -and -not $env:CI
+  $nextMilestone = 25
   try {
     while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
       $file.Write($buffer, 0, $read)
       $done += $read
       $pct = if ($total -gt 0) { [int][Math]::Floor($done * 100 / $total) } else { 0 }
-      if ($pct -ne $lastDraw) {
+      if ($interactive -and $pct -ne $lastDraw) {
         $lastDraw = $pct
         $filled = [int][Math]::Floor($pct * $width / 100)
         $speed = if ($watch.Elapsed.TotalSeconds -gt 0) { "  " + (Format-Size ($done / $watch.Elapsed.TotalSeconds)) + "/s" } else { "" }
         $bar = ("#" * $filled).PadRight($width, "-")
         Write-Host ("`r      [{0}] {1,3}%  {2} / {3}{4}   " -f $bar, $pct, (Format-Size $done), (Format-Size $total), $speed) -NoNewline
+      } elseif (-not $interactive -and $pct -ge $nextMilestone -and $nextMilestone -lt 100) {
+        Write-Info "" ("{0}% ({1} / {2})" -f $nextMilestone, (Format-Size $done), (Format-Size $total))
+        $nextMilestone += 25
       }
     }
   } finally { $file.Close(); $stream.Close(); $client.Dispose() }
-  Write-Host ""
+  if ($interactive) { Write-Host "" }
   if ($total -gt 0 -and $done -ne $total) { Stop-Install ("Incomplete download: got {0} of {1}." -f (Format-Size $done), (Format-Size $total)) }
   Write-Info "Done" ("{0} in {1:N0}s" -f (Format-Size $done), $watch.Elapsed.TotalSeconds)
 
