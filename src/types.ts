@@ -3,8 +3,12 @@ export type Severity = (typeof SEVERITIES)[number];
 
 export type FindingKind = "code" | "dependency";
 
+/** Security findings gate the build by default; quality findings only inform. */
+export type Category = "security" | "quality";
+
 export interface Finding {
   kind: FindingKind;
+  category: Category;
   ruleId: string;
   severity: Severity;
   title: string;
@@ -25,6 +29,12 @@ export interface Finding {
     aliases: string[];
     fixedVersions: string[];
     url: string;
+    /** Only reachable from devDependencies (undefined when the lockfile doesn't say). */
+    dev?: boolean;
+    /** Declared directly in the manifest, as opposed to pulled in by another package. */
+    direct?: boolean;
+    /** For transitive packages: a direct dependency that pulls it in. */
+    via?: string;
   };
 }
 

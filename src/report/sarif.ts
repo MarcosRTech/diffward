@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { RULES } from "../code/rules.ts";
+import { fingerprint } from "../fingerprint.ts";
 import type { ScanResult } from "../scan.ts";
 import type { Finding, Severity } from "../types.ts";
 import { HOMEPAGE, VERSION } from "../version.ts";
@@ -65,7 +65,8 @@ export function toSarif(result: ScanResult): object {
           partialFingerprints: { "diffward/v1": fingerprint(f) },
           properties: {
             severity: f.severity,
-            "security-severity": SECURITY_SEVERITY[f.severity],
+            // GitHub treats a result as a security alert only when this is present.
+            ...(f.category === "security" ? { "security-severity": SECURITY_SEVERITY[f.severity] } : {}),
             ...(f.dependency ? { package: `${f.dependency.name}@${f.dependency.version}` } : {}),
           },
         })),
@@ -76,7 +77,10 @@ export function toSarif(result: ScanResult): object {
 
 function ruleDescriptor(f: Finding): object {
   const meta = RULES.get(f.ruleId);
-  const tags = ["security", ...(f.cwe ?? []).map((c) => `external/cwe/${c.toLowerCase()}`)];
+  const tags = [
+    f.category === "quality" ? "reliability" : "security",
+    ...(f.cwe ?? []).map((c) => `external/cwe/${c.toLowerCase()}`),
+  ];
   if (f.dependency) {
     tags.push("dependency", f.dependency.ecosystem);
     const ids = [f.dependency.vulnId, ...f.dependency.aliases].join(", ");
@@ -102,18 +106,9 @@ function ruleDescriptor(f: Finding): object {
     properties: {
       tags,
       precision: "medium",
-      "security-severity": SECURITY_SEVERITY[meta?.severity ?? f.severity],
+      ...(f.category === "security" ? { "security-severity": SECURITY_SEVERITY[meta?.severity ?? f.severity] } : {}),
     },
   };
-}
-
-/**
- * Stable across unrelated edits: the rule, the file and the trimmed line text
- * (not the line number), so alerts survive code moving up or down.
- */
-function fingerprint(f: Finding): string {
-  const anchor = f.dependency ? `${f.dependency.name}@${f.dependency.version}` : (f.snippet ?? String(f.line));
-  return createHash("sha256").update(`${f.ruleId}\0${f.file}\0${anchor}`).digest("hex").slice(0, 32);
 }
 
 function truncate(s: string, n: number): string {

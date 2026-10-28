@@ -1,5 +1,22 @@
 import ts from "typescript";
 import type { RawFinding } from "../rules.ts";
+import {
+  collectAliases,
+  dotted,
+  isConstString,
+  isFixedOrigin,
+  isPlaceholderList,
+  isRequestSource,
+  isSanitized,
+  objectProp,
+  propName,
+  REQUEST_OBJECTS,
+  requiredModule,
+  resolveCallee,
+  stringValue,
+  unwrap,
+} from "./ast.ts";
+import { analyzeQuality } from "./quality.ts";
 
 /**
  * AST rules for JavaScript/TypeScript.
@@ -13,7 +30,8 @@ import type { RawFinding } from "../rules.ts";
  */
 export function analyzeJs(fileName: string, text: string): RawFinding[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKind(fileName));
-  return new JsAnalyzer(sf).run();
+  const security = new JsAnalyzer(sf);
+  return [...security.run(), ...analyzeQuality(fileName, sf, security.aliases)];
 }
 
 function scriptKind(fileName: string): ts.ScriptKind {
@@ -23,8 +41,6 @@ function scriptKind(fileName: string): ts.ScriptKind {
   return ts.ScriptKind.JS;
 }
 
-const REQUEST_OBJECTS = /^(?:req|request|ctx\.request|ctx|context\.req|c\.req|event|evt)$/;
-const REQUEST_FIELDS = /^(?:body|query|params|headers|cookies|signedCookies|queryStringParameters|pathParameters|multiValueQueryStringParameters|rawQuery|search|hash|url|originalUrl|path|files|file)$/;
 const SANITIZERS = new Set(["Number", "parseInt", "parseFloat", "Boolean", "encodeURIComponent", "escape", "sanitize", "basename"]);
 const SQL_KEYWORDS = /\b(?:select\s[\s\S]*\bfrom|insert\s+into|update\s+\S+\s+set|delete\s+from|where\s|order\s+by|drop\s+table|create\s+table|alter\s+table|exec(?:ute)?\s|union\s+select)\b/i;
 const SECURITY_NAME = /token|secret|password|passwd|nonce|salt|otp|session|csrf|api_?key|apikey|auth|reset|verif|invite|code/i;
@@ -41,6 +57,8 @@ interface VarInfo {
   constant?: boolean;
   /** Named like a request object (`request`, `event`...) but typed as something else. */
   notRequest?: boolean;
+  /** `const options = { query: sql, params }`: kept to find SQL passed as an options object. */
+  objectInit?: ts.ObjectLiteralExpression;
 }
 
 /** I/O calls: their result is data from our own backend/DB, not the caller's input. */
@@ -52,12 +70,13 @@ class JsAnalyzer {
   private findings: RawFinding[] = [];
   private scopes: Scope[] = [new Map()];
   /** Local names bound to child_process / fs / http-client imports. */
-  private aliases = new Map<string, string>();
+  readonly aliases: Map<string, string>;
 
-  constructor(private sf: ts.SourceFile) {}
+  constructor(readonly sf: ts.SourceFile) {
+    this.aliases = collectAliases(sf);
+  }
 
   run(): RawFinding[] {
-    this.collectImports();
     // Module-level constants may be declared below the functions that use them.
     for (const st of this.sf.statements) {
       if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) if (d.initializer) this.onVariable(d, d.initializer);
@@ -66,55 +85,9 @@ class JsAnalyzer {
     return this.findings;
   }
 
-  // ---------------------------------------------------------------- imports
-
-  private collectImports() {
-    const bind = (local: string, canonical: string) => this.aliases.set(local, canonical);
-    const visit = (node: ts.Node) => {
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-        const mod = node.moduleSpecifier.text.replace(/^node:/, "");
-        const clause = node.importClause;
-        if (clause?.name) bind(clause.name.text, mod);
-        const nb = clause?.namedBindings;
-        if (nb && ts.isNamespaceImport(nb)) bind(nb.name.text, mod);
-        if (nb && ts.isNamedImports(nb)) {
-          for (const el of nb.elements) bind(el.name.text, `${mod}.${(el.propertyName ?? el.name).text}`);
-        }
-      }
-      // const cp = require("child_process") / const { exec } = require("child_process")
-      if (ts.isVariableDeclaration(node) && node.initializer) {
-        const mod = requiredModule(node.initializer);
-        if (mod) {
-          if (ts.isIdentifier(node.name)) bind(node.name.text, mod);
-          else if (ts.isObjectBindingPattern(node.name)) {
-            for (const el of node.name.elements) {
-              if (!ts.isIdentifier(el.name)) continue;
-              const prop = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
-              bind(el.name.text, `${mod}.${prop}`);
-            }
-          }
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(this.sf);
-  }
-
   /** Canonical dotted name of a callee, resolving import aliases. */
-  private calleeName(expr: ts.Expression): string {
-    // `Function("a", "...")(x)` calls the *result* of a call; it is not Function itself.
-    const e = unwrap(expr);
-    if (ts.isCallExpression(e)) return "";
-    // require("child_process").exec(...)
-    if (ts.isPropertyAccessExpression(e)) {
-      const mod = requiredModule(e.expression);
-      if (mod) return `${mod}.${e.name.text}`;
-    }
-    const text = dotted(expr);
-    if (!text) return "";
-    const [head, ...rest] = text.split(".");
-    const alias = this.aliases.get(head!);
-    return alias ? [alias, ...rest].join(".") : text;
+  calleeName(expr: ts.Expression): string {
+    return resolveCallee(expr, this.aliases);
   }
 
   // ---------------------------------------------------------------- scopes
@@ -294,6 +267,7 @@ class JsAnalyzer {
       dynamicString: this.isDynamicString(init),
       sqlLike: SQL_KEYWORDS.test(init.getText(this.sf)),
       constant: isConst && ts.isIdentifier(name) && this.isConstExpr(init),
+      objectInit: ts.isObjectLiteralExpression(unwrap(init)) ? (unwrap(init) as ts.ObjectLiteralExpression) : undefined,
     };
     this.bindPattern(name, info);
     if (ts.isIdentifier(name)) this.checkInsecureRandom(name.text, init);
@@ -410,17 +384,19 @@ class JsAnalyzer {
     }
 
     // ---- SQL injection
-    if (/^(?:query|execute|raw|whereRaw|orderByRaw|havingRaw|joinRaw|selectRaw|fromRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe|exec|prepare|all|get|run)$/.test(last) && first) {
-      const tainted = this.isTainted(first);
-      const dynamic = this.isDynamicString(first);
+    const sqlCall = this.sqlArgument(args);
+    if (/^(?:query|execute|raw|whereRaw|orderByRaw|havingRaw|joinRaw|selectRaw|fromRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe|exec|prepare|all|get|run|createQueryJob)$/.test(last) && sqlCall) {
+      const sql = sqlCall.sql;
+      const tainted = this.isTainted(sql);
+      const dynamic = this.isDynamicString(sql);
       const unsafeApi = /Unsafe$|^unsafe$/.test(last);
-      const sqlish = this.looksLikeSql(first) || unsafeApi || /Raw$|^raw$/.test(last);
+      const sqlish = this.looksLikeSql(sql) || unsafeApi || /Raw$|^raw$/.test(last);
       // `.get`, `.all`, `.run` are common names; require clear SQL evidence for them.
       const weakName = /^(?:get|all|run|exec|prepare)$/.test(last);
-      if (dynamic && sqlish && (!weakName || this.looksLikeSql(first))) {
+      if (dynamic && sqlish && (!weakName || this.looksLikeSql(sql))) {
         // A bindings argument means values are parameterized; the dynamic part is
         // usually identifiers or placeholder lists, so only request data escalates.
-        const severity = args.length > 1 && !tainted ? undefined : this.injectionSeverity(first);
+        const severity = sqlCall.bindings && !tainted ? undefined : this.injectionSeverity(sql);
         this.report(node, "js/sql-injection", { severity, detail: `${last}()` });
       } else if (tainted && (unsafeApi || /Raw$|^raw$/.test(last))) {
         this.report(node, "js/sql-injection", { severity: "critical", detail: `${last}()` });
@@ -489,6 +465,25 @@ class JsAnalyzer {
     }
   }
 
+  /**
+   * The SQL text of a query call: the first argument, or the `query`/`sql`/`text`
+   * property when the driver takes an options object (BigQuery, pg, Sequelize),
+   * also through a local `const options = { ... }`.
+   */
+  private sqlArgument(args: ts.NodeArray<ts.Expression>): { sql: ts.Expression; bindings: boolean } | null {
+    const first = args[0];
+    if (!first) return null;
+    let obj: ts.ObjectLiteralExpression | undefined;
+    const e = unwrap(first);
+    if (ts.isObjectLiteralExpression(e)) obj = e;
+    else if (ts.isIdentifier(e)) obj = this.lookup(e.text)?.objectInit;
+    if (!obj) return { sql: first, bindings: args.length > 1 };
+    const sql = objectProp(obj, "query") ?? objectProp(obj, "sql") ?? objectProp(obj, "text");
+    if (!sql) return null;
+    const bindings = ["params", "values", "bindings", "replacements", "parameters"].some((k) => objectProp(obj!, k));
+    return { sql, bindings: bindings || args.length > 1 };
+  }
+
   /** path.basename(x) strips directories; containment checks (startsWith) are not tracked. */
   private isContained(expr: ts.Expression): boolean {
     const e = unwrap(expr);
@@ -507,145 +502,9 @@ class JsAnalyzer {
     if (found) this.report(found, "js/insecure-random", { detail: name });
   }
 
-  private report(node: ts.Node, ruleId: string, extra: Partial<RawFinding> = {}) {
+  report(node: ts.Node, ruleId: string, extra: Partial<RawFinding> = {}) {
     const start = this.sf.getLineAndCharacterOfPosition(node.getStart(this.sf));
     const end = this.sf.getLineAndCharacterOfPosition(node.getEnd());
     this.findings.push({ ruleId, line: start.line + 1, column: start.character + 1, endLine: end.line + 1, ...extra });
   }
-}
-
-// -------------------------------------------------------------------- helpers
-
-function requiredModule(expr: ts.Expression): string | null {
-  const e = unwrap(expr);
-  if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === "require") {
-    const arg = e.arguments[0];
-    if (arg && ts.isStringLiteral(arg)) return arg.text.replace(/^node:/, "");
-  }
-  // const { promises: fs } = require("fs") is rare; await import("x") is handled the same way.
-  if (ts.isAwaitExpression(e)) return requiredModule(e.expression);
-  if (ts.isCallExpression(e) && e.expression.kind === ts.SyntaxKind.ImportKeyword) {
-    const arg = e.arguments[0];
-    if (arg && ts.isStringLiteral(arg)) return arg.text.replace(/^node:/, "");
-  }
-  return null;
-}
-
-function unwrap(e: ts.Expression): ts.Expression {
-  while (
-    ts.isParenthesizedExpression(e) ||
-    ts.isAsExpression(e) ||
-    ts.isNonNullExpression(e) ||
-    ts.isAwaitExpression(e) ||
-    ts.isSatisfiesExpression(e) ||
-    ts.isTypeAssertionExpression(e)
-  ) {
-    e = e.expression;
-  }
-  return e;
-}
-
-/** "a.b.c" for identifier/property chains, "" otherwise. */
-function dotted(e: ts.Expression): string {
-  e = unwrap(e);
-  if (ts.isIdentifier(e)) return e.text;
-  if (e.kind === ts.SyntaxKind.ThisKeyword) return "this";
-  if (ts.isPropertyAccessExpression(e)) {
-    const left = dotted(e.expression);
-    return left ? `${left}.${e.name.text}` : e.name.text;
-  }
-  if (ts.isElementAccessExpression(e)) {
-    const key = stringValue(e.argumentExpression);
-    const left = dotted(e.expression);
-    return key && left ? `${left}.${key}` : left;
-  }
-  if (ts.isCallExpression(e)) return dotted(e.expression);
-  return "";
-}
-
-function isRequestSource(e: ts.PropertyAccessExpression | ts.ElementAccessExpression): boolean {
-  const field = ts.isPropertyAccessExpression(e) ? e.name.text : stringValue(e.argumentExpression);
-  if (!field) return false;
-  const obj = dotted(e.expression);
-  if (REQUEST_FIELDS.test(field) && REQUEST_OBJECTS.test(obj)) return true;
-  // location.search / location.hash, document.URL. CLI arguments (process.argv)
-  // come from the operator, so they are not treated as attacker-controlled.
-  if (/(?:^|\.)location$/.test(obj) && /^(?:search|hash|href)$/.test(field)) return true;
-  if (obj === "document" && /^(?:URL|documentURI|referrer|cookie)$/.test(field)) return true;
-  return false;
-}
-
-function stringValue(e: ts.Node | undefined): string | undefined {
-  if (!e) return undefined;
-  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
-  return undefined;
-}
-
-function isConstString(e: ts.Expression): boolean {
-  e = unwrap(e);
-  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isNumericLiteral(e)) return true;
-  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    return isConstString(e.left) && isConstString(e.right);
-  }
-  return false;
-}
-
-/**
- * Placeholder lists for bound parameters: `ids.map(() => "?").join(", ")`,
- * `ids.map((_, i) => `$${i + 1}`).join()`, `Array(n).fill("?").join()`.
- */
-function isPlaceholderList(e: ts.Expression): boolean {
-  e = unwrap(e);
-  if (!ts.isCallExpression(e) || !ts.isPropertyAccessExpression(e.expression) || e.expression.name.text !== "join") return false;
-  const inner = unwrap(e.expression.expression);
-  if (!ts.isCallExpression(inner) || !ts.isPropertyAccessExpression(inner.expression)) return false;
-  const method = inner.expression.name.text;
-  const arg = inner.arguments[0];
-  if (method === "fill") return Boolean(arg && isConstString(arg));
-  if (method !== "map" || !arg || !(ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))) return false;
-  const body = ts.isArrowFunction(arg) && !ts.isBlock(arg.body) ? unwrap(arg.body) : undefined;
-  if (!body) return false;
-  if (isConstString(body)) return true;
-  // `$${i + 1}` / `:p${i}` — a fixed prefix plus the index (never the element itself)
-  const index = arg.parameters[1]?.name;
-  if (!index || !ts.isIdentifier(index) || !ts.isTemplateExpression(body)) return false;
-  return body.templateSpans.every((s) => {
-    const words = s.expression.getText().match(/[A-Za-z_$][\w$]*/g) ?? [];
-    return /^[\w\s+]+$/.test(s.expression.getText()) && words.every((w) => w === index.text);
-  });
-}
-
-/** `https://api.example.com/${id}` keeps a fixed origin, so it is not SSRF / open redirect. */
-function isFixedOrigin(e: ts.Expression): boolean {
-  e = unwrap(e);
-  const head = ts.isTemplateExpression(e)
-    ? e.head.text
-    : ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken
-      ? (stringValue(leftmost(e)) ?? "")
-      : "";
-  return /^https?:\/\/[^/?#]+[/?#]/.test(head) || (head.startsWith("/") && !head.startsWith("//"));
-}
-
-function leftmost(e: ts.BinaryExpression): ts.Expression {
-  let cur: ts.Expression = e;
-  while (ts.isBinaryExpression(cur)) cur = cur.left;
-  return cur;
-}
-
-function isSanitized(e: ts.Expression): boolean {
-  e = unwrap(e);
-  return ts.isCallExpression(e) && /sanitize|purify|escape/i.test(dotted(e.expression));
-}
-
-function objectProp(obj: ts.ObjectLiteralExpression, key: string): ts.Expression | undefined {
-  for (const p of obj.properties) {
-    if (ts.isPropertyAssignment(p) && propName(p.name) === key) return p.initializer;
-    if (ts.isShorthandPropertyAssignment(p) && p.name.text === key) return p.name;
-  }
-  return undefined;
-}
-
-function propName(n: ts.PropertyName): string | undefined {
-  if (ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isPrivateIdentifier(n)) return n.text;
-  return undefined;
 }

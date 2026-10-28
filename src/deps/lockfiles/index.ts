@@ -13,16 +13,31 @@ import {
 export interface LockedPackage extends Package {
   /** 1-based line in the lockfile where the package is declared, if known. */
   line?: number;
+  /** Only needed for development (undefined when the lockfile doesn't say). */
+  dev?: boolean;
+  /** Listed in the manifest, as opposed to pulled in by another package. */
+  direct?: boolean;
+  /** For transitive packages: the direct dependency that pulls it in. */
+  via?: string;
 }
 
-type Parser = (text: string) => LockedPackage[];
+export interface ParseContext {
+  /** Lockfile path relative to the scan root. */
+  path: string;
+  /** Text of a file relative to the lockfile's directory (e.g. "package.json"), or null. */
+  sibling: (name: string) => string | null;
+  /** Files under the lockfile's directory, relative to it (for workspace manifests). */
+  files: string[];
+}
+
+type Parser = (text: string, ctx: ParseContext) => LockedPackage[];
 
 const PARSERS: { match: (base: string) => boolean; parse: Parser }[] = [
   { match: (b) => b === "package-lock.json" || b === "npm-shrinkwrap.json", parse: parsePackageLock },
   { match: (b) => b === "bun.lock", parse: parseBunLock },
   { match: (b) => b === "yarn.lock", parse: parseYarnLock },
   { match: (b) => b === "pnpm-lock.yaml", parse: parsePnpmLock },
-  { match: (b) => /^requirements.*\.txt$/.test(b) || b === "constraints.txt", parse: parseRequirements },
+  { match: (b) => /^requirements.*\.txt$/.test(b) || b === "constraints.txt", parse: (t, ctx) => parseRequirements(t, ctx.path) },
   { match: (b) => b === "Pipfile.lock", parse: parsePipfileLock },
   { match: (b) => b === "poetry.lock" || b === "pdm.lock", parse: (t) => parseTomlPackageTables(t, "PyPI") },
   { match: (b) => b === "uv.lock", parse: (t) => parseTomlPackageTables(t, "PyPI", { skipLocal: true }) },
@@ -43,11 +58,16 @@ export function isLockfile(path: string): boolean {
 }
 
 /** Throws a descriptive error if the file is malformed. */
-export function parseLockfile(path: string, text: string): LockedPackage[] {
+export function parseLockfile(
+  path: string,
+  text: string,
+  sibling: ParseContext["sibling"] = () => null,
+  files: string[] = [],
+): LockedPackage[] {
   const parser = PARSERS.find((p) => p.match(basename(path)));
   if (!parser) return [];
   try {
-    return parser.parse(text);
+    return parser.parse(text, { path, sibling, files });
   } catch (err) {
     throw new Error(`failed to parse ${path}: ${(err as Error).message}`);
   }

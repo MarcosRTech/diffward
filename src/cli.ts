@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
+import { relative } from "node:path";
 import { parseArgs } from "node:util";
+import { applyBaseline, baselinePath, readBaseline, writeBaseline } from "./baseline.ts";
 import { RULES } from "./code/rules.ts";
 import { loadConfig } from "./config.ts";
 import { createOsvClient, DEFAULT_OSV_URL } from "./deps/osv.ts";
 import { gitRoot } from "./diff.ts";
+import { failed, type Policy, type Threshold } from "./policy.ts";
 import { toMarkdown } from "./report/markdown.ts";
 import { toSarif } from "./report/sarif.ts";
 import { toText } from "./report/text.ts";
 import { scan, type ScanResult } from "./scan.ts";
-import { atLeast, isSeverity, type Severity } from "./types.ts";
+import { isSeverity } from "./types.ts";
 import { VERSION } from "./version.ts";
 
 const HELP = `diffward ${VERSION} — security scanner for pull requests
 
 Usage:
   diffward [scan] [path] [options]
+  diffward baseline [path] [options]   Record current findings so only new ones are reported
 
 Scope:
   --diff <ref>            Only report issues introduced since the merge-base with <ref>
@@ -24,7 +28,9 @@ Scope:
   --diff-file <file|->    Same, from a unified diff file (or stdin) instead of git.
   --no-code               Skip code analysis.
   --no-deps               Skip the dependency (OSV) check.
+  --no-quality            Skip the quality (bad-practice) rules.
   --deps-scope <s>        changed | all. Default: changed with --diff, all otherwise.
+  --no-baseline           Ignore the baseline file and report everything.
 
 Output:
   --format <f>            text | json | sarif | markdown for stdout (default: text)
@@ -35,8 +41,10 @@ Output:
   --no-color              Disable colors (also honors NO_COLOR).
 
 Policy:
-  --fail-on <severity>    Exit 1 if any finding is at or above: critical | high |
+  --fail-on <severity>    Exit 1 on a security finding at or above: critical | high |
                           medium | low | info | none (default: high).
+  --fail-on-quality <s>   Same for quality findings (default: none).
+  --fail-on-dev           Let vulnerabilities in dev-only dependencies fail too.
   --config <file>         Config file (default: <repo>/.diffward.json).
 
 Other:
@@ -45,7 +53,7 @@ Other:
   -v, --version           Print the version.
   -h, --help              Show this help.
 
-Exit codes: 0 = no findings at/above --fail-on, 1 = findings at/above --fail-on,
+Exit codes: 0 = nothing reached the fail thresholds, 1 = something did,
 2 = usage or runtime error (e.g. OSV unreachable).
 
 Examples:
@@ -53,6 +61,7 @@ Examples:
   diffward --diff origin/main                   # only what this branch introduces
   diffward --diff origin/main --sarif out.sarif --fail-on critical
   git diff main... | diffward --diff-file -     # any CI that can produce a patch
+  diffward baseline                             # adopt on an old project: start from zero
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -64,7 +73,9 @@ async function main(argv: string[]): Promise<number> {
       "diff-file": { type: "string" },
       "no-code": { type: "boolean" },
       "no-deps": { type: "boolean" },
+      "no-quality": { type: "boolean" },
       "deps-scope": { type: "string" },
+      "no-baseline": { type: "boolean" },
       format: { type: "string", default: "text" },
       output: { type: "string", short: "o" },
       sarif: { type: "string" },
@@ -72,6 +83,8 @@ async function main(argv: string[]): Promise<number> {
       json: { type: "string" },
       "no-color": { type: "boolean" },
       "fail-on": { type: "string" },
+      "fail-on-quality": { type: "string" },
+      "fail-on-dev": { type: "boolean" },
       config: { type: "string" },
       "osv-url": { type: "string" },
       "list-rules": { type: "boolean" },
@@ -90,16 +103,21 @@ async function main(argv: string[]): Promise<number> {
   }
   if (values["list-rules"]) {
     for (const r of RULES.values()) {
-      process.stdout.write(`${r.id.padEnd(30)} ${r.severity.padEnd(8)} ${r.cwe.join(",").padEnd(16)} ${r.title}\n`);
+      const cat = r.category ?? "security";
+      process.stdout.write(`${r.id.padEnd(30)} ${cat.padEnd(9)} ${r.severity.padEnd(8)} ${r.cwe.join(",").padEnd(16)} ${r.title}\n`);
     }
     return 0;
   }
 
-  const args = positionals[0] === "scan" ? positionals.slice(1) : positionals;
+  const command = positionals[0] === "scan" || positionals[0] === "baseline" ? positionals[0] : "scan";
+  const args = positionals[0] === command ? positionals.slice(1) : positionals;
   if (args.length > 1) throw new UsageError(`expected at most one path, got: ${args.join(" ")}`);
   const path = args[0] ?? ".";
 
   if (values.diff && values["diff-file"]) throw new UsageError("use either --diff or --diff-file, not both");
+  if (command === "baseline" && (values.diff || values["diff-file"])) {
+    throw new UsageError("a baseline records the whole project; --diff/--diff-file don't apply");
+  }
   const format = values.format!;
   if (!["text", "json", "sarif", "markdown"].includes(format)) throw new UsageError(`unknown --format: ${format}`);
   const depsScope = values["deps-scope"];
@@ -107,11 +125,13 @@ async function main(argv: string[]): Promise<number> {
     throw new UsageError(`--deps-scope must be "changed" or "all"`);
   }
 
-  const config = loadConfig(gitRoot(path) ?? path, values.config);
-
-  const failOnRaw = values["fail-on"] ?? config.failOn ?? "high";
-  if (failOnRaw !== "none" && !isSeverity(failOnRaw)) throw new UsageError(`invalid --fail-on: ${failOnRaw}`);
-  const failOn = failOnRaw as Severity | "none";
+  const root = gitRoot(path) ?? path;
+  const config = loadConfig(root, values.config);
+  const policy: Policy = {
+    failOn: threshold("--fail-on", values["fail-on"] ?? config.failOn ?? "high"),
+    failOnQuality: threshold("--fail-on-quality", values["fail-on-quality"] ?? config.failOnQuality ?? "none"),
+    failOnDev: values["fail-on-dev"] ?? config.failOnDev ?? false,
+  };
 
   const diffPatch = values["diff-file"] !== undefined ? readInput(values["diff-file"]) : undefined;
 
@@ -121,22 +141,38 @@ async function main(argv: string[]): Promise<number> {
     diffPatch,
     code: !values["no-code"],
     deps: !values["no-deps"],
+    quality: !values["no-quality"] && config.quality !== false,
     depsScope,
     osv: createOsvClient(values["osv-url"] ?? process.env.DIFFWARD_OSV_URL ?? DEFAULT_OSV_URL),
     config,
   });
 
+  const blPath = baselinePath(result.root, config.baseline);
+  if (command === "baseline") {
+    const n = writeBaseline(blPath, result.findings);
+    process.stdout.write(
+      `diffward: wrote ${n} finding(s) to ${relative(process.cwd(), blPath) || blPath}. ` +
+        `Commit it; later scans report only findings that are not in it.\n`,
+    );
+    return 0;
+  }
+  if (!values["no-baseline"]) {
+    const { kept, baselined } = applyBaseline(result.findings, readBaseline(blPath));
+    result.findings = kept;
+    result.baselined = baselined;
+  }
+
   const color = !values["no-color"] && !process.env.NO_COLOR && !values.output && Boolean(process.stdout.isTTY);
   const render = (fmt: string): string => {
     switch (fmt) {
       case "json":
-        return JSON.stringify(toJson(result, failOn), null, 2) + "\n";
+        return JSON.stringify(toJson(result, policy), null, 2) + "\n";
       case "sarif":
         return JSON.stringify(toSarif(result), null, 2) + "\n";
       case "markdown":
-        return toMarkdown(result);
+        return toMarkdown(result, policy);
       default:
-        return toText(result, { color }) + "\n";
+        return toText(result, { color, policy }) + "\n";
     }
   };
 
@@ -146,24 +182,26 @@ async function main(argv: string[]): Promise<number> {
   if (values.markdown) writeFileSync(values.markdown, render("markdown"));
   if (values.json) writeFileSync(values.json, render("json"));
 
-  return failed(result, failOn) ? 1 : 0;
+  return failed(result.findings, policy) ? 1 : 0;
 }
 
-function failed(result: ScanResult, failOn: Severity | "none"): boolean {
-  return failOn !== "none" && result.findings.some((f) => atLeast(f.severity, failOn));
+function threshold(flag: string, raw: string): Threshold {
+  if (raw !== "none" && !isSeverity(raw)) throw new UsageError(`invalid ${flag}: ${raw}`);
+  return raw as Threshold;
 }
 
-function toJson(result: ScanResult, failOn: Severity | "none") {
+function toJson(result: ScanResult, policy: Policy) {
   return {
     version: VERSION,
     mode: result.mode,
-    failOn,
-    failed: failed(result, failOn),
+    policy,
+    failed: failed(result.findings, policy),
     stats: {
       filesScanned: result.filesScanned,
       lockfiles: result.lockfiles,
       packagesChecked: result.packagesChecked,
       suppressed: result.suppressed,
+      baselined: result.baselined,
     },
     findings: result.findings,
   };

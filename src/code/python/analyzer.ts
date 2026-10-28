@@ -160,8 +160,65 @@ export function analyzePython(text: string): RawFinding[] {
     // ---- tempfile
     const tmp = /\b(?:tempfile\.)?mktemp\s*\(/.exec(code);
     if (tmp && !/mkstemp|mkdtemp/.test(tmp[0])) report("py/insecure-tempfile", tmp.index);
+
+    // ---- HTTP without timeout (requests has none by default; httpx defaults to 5 s)
+    for (const m of code.matchAll(/\brequests\.(get|post|put|patch|delete|head|options|request)\s*\(/g)) {
+      if (!/\btimeout\s*=/.test(callArgs(code, m.index! + m[0].length))) {
+        report("py/http-no-timeout", m.index!, { detail: `requests.${m[1]}()` });
+      }
+    }
+
+    // ---- sensitive data in logs
+    const logCall = /\b(?:logging|logger|log|self\.logger|self\.log|current_app\.logger|app\.logger)\.(?:debug|info|warning|warn|error|exception|critical)\s*\(|(?<![\w.])print\s*\(/.exec(code);
+    if (logCall) {
+      const args = callArgs(code, logCall.index + logCall[0].length);
+      const hit = sensitiveInPython(args);
+      if (hit) report("py/sensitive-log", logCall.index, { detail: hit });
+    }
+  }
+
+  // ---- `except ...: pass` (same line, or a block whose only statement is pass)
+  for (let i = 0; i < statements.length; i++) {
+    const code = statements[i]!.code;
+    const at = code.search(/\S/);
+    const inline = /^\s*except\b[^:]*:\s*(?:pass|\.\.\.)\s*$/.test(code);
+    const header = /^(\s*)except\b[^:]*:\s*$/.exec(code);
+    const next = statements[i + 1]?.code;
+    const after = statements[i + 2]?.code;
+    const onlyPass =
+      header !== null &&
+      next !== undefined &&
+      /^\s*(?:pass|\.\.\.)\s*$/.test(next) &&
+      indent(next) > header[1]!.length &&
+      !(after !== undefined && indent(after) > header[1]!.length);
+    if (inline || onlyPass) out.push({ ruleId: "py/empty-except", line: statements[i]!.lineAt(at), column: at + 1 });
   }
   return out;
+}
+
+function indent(code: string): number {
+  return /^[ \t]*/.exec(code)![0].length;
+}
+
+const PY_SENSITIVE =
+  /^(?:password|passwd|pwd|secret|client_secret|access_token|refresh_token|id_token|token|auth_token|api_key|apikey|private_key|authorization|cookie|cookies|cpf|cnpj|ssn|card_number|cvv|cvc)$/i;
+
+/** A sensitive variable/attribute passed to a log call (also inside f-string fields). */
+function sensitiveInPython(args: string): string | null {
+  const whole = /\brequest\.(?:headers|cookies|form|json|data)\b(?!\s*[.[(])/.exec(args);
+  if (whole) return whole[0];
+  // f-string fields: f"token={token}"
+  for (const m of args.matchAll(/\{([A-Za-z_][\w.]*)(?:[!:][^}]*)?\}/g)) {
+    if (PY_SENSITIVE.test(m[1]!.split(".").pop()!)) return m[1]!;
+  }
+  // names outside string literals: log.info("x %s", password)
+  const code = args.replace(/[rbuRBU]{0,2}("""|'''|"|')(?:\\.|(?!\1)[\s\S])*\1/g, '""')
+    // bool(token), len(password), mask_cpf(cpf): derived values, not the secret
+    .replace(/\b(?:bool|len|type|isinstance|\w*mask\w*|\w*hash\w*|\w*redact\w*)\s*\([^()]*\)/gi, "0");
+  for (const m of code.matchAll(/(?<![\w"'])([A-Za-z_][\w.]*)(?![\w(])/g)) {
+    if (PY_SENSITIVE.test(m[1]!.split(".").pop()!)) return m[1]!;
+  }
+  return null;
 }
 
 const SOURCE =

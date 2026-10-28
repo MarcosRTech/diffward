@@ -12,6 +12,8 @@ export interface RuleMeta {
   cwe: string[];
   help: string;
   languages: ("javascript" | "python" | "any")[];
+  /** Defaults to "security". Quality rules don't fail the build unless --fail-on-quality is set. */
+  category?: "quality";
 }
 
 const RULE_LIST: RuleMeta[] = [
@@ -238,6 +240,94 @@ const RULE_LIST: RuleMeta[] = [
     cwe: ["CWE-377"],
     help: "Use tempfile.mkstemp() or tempfile.NamedTemporaryFile().",
     languages: ["python"],
+  },
+  {
+    id: "js/sensitive-log",
+    title: "Sensitive data written to logs",
+    severity: "medium",
+    cwe: ["CWE-532"],
+    help: "Log identifiers, not credentials or personal data. Drop the field, or mask it (last 4 digits) before logging; never log whole request bodies or headers.",
+    languages: ["javascript"],
+  },
+  {
+    id: "py/sensitive-log",
+    title: "Sensitive data written to logs",
+    severity: "medium",
+    cwe: ["CWE-532"],
+    help: "Log identifiers, not credentials or personal data. Drop the field or mask it before logging.",
+    languages: ["python"],
+  },
+  {
+    id: "js/http-no-timeout",
+    title: "Outbound HTTP call without a timeout",
+    severity: "medium",
+    cwe: ["CWE-400"],
+    help: "A slow partner keeps the request (and its socket) open indefinitely and piles up concurrent requests. Pass `timeout` (axios) or `signal: AbortSignal.timeout(ms)` (fetch), or set it once on the axios instance.",
+    languages: ["javascript"],
+    category: "quality",
+  },
+  {
+    id: "js/unbounded-query",
+    title: "Query without a filter or a limit",
+    severity: "medium",
+    cwe: ["CWE-770"],
+    help: "Reading a whole table grows with the data until it exhausts memory or blocks the event loop while serializing. Add `where`, and `take`/`limit` with pagination.",
+    languages: ["javascript"],
+    category: "quality",
+  },
+  {
+    id: "js/await-in-loop",
+    title: "Database/HTTP call awaited inside a loop (N+1)",
+    severity: "low",
+    cwe: ["CWE-1050"],
+    help: "Each iteration waits for a round trip. Batch it (WHERE id IN (...), createMany, a bulk endpoint) or run with bounded concurrency (p-limit).",
+    languages: ["javascript"],
+    category: "quality",
+  },
+  {
+    id: "js/floating-promise",
+    title: "Promise neither awaited nor handled",
+    severity: "low",
+    cwe: ["CWE-754"],
+    help: "A rejection here is unhandled: errors are lost or crash the process. `await` it, return it, or add `.catch(...)`; `forEach` never waits for async callbacks — use for...of or Promise.all(map(...)).",
+    languages: ["javascript"],
+    category: "quality",
+  },
+  {
+    id: "js/empty-catch",
+    title: "Error silently swallowed",
+    severity: "low",
+    cwe: ["CWE-1069"],
+    help: "Log the error with context, rethrow it, or leave a comment explaining why ignoring it is safe.",
+    languages: ["javascript"],
+    category: "quality",
+  },
+  {
+    id: "js/sync-io-in-handler",
+    title: "Blocking call inside a request handler",
+    severity: "low",
+    cwe: ["CWE-1050"],
+    help: "Sync file system, crypto and child_process calls block the event loop for every concurrent request. Use the async/promise versions.",
+    languages: ["javascript"],
+    category: "quality",
+  },
+  {
+    id: "py/http-no-timeout",
+    title: "Outbound HTTP call without a timeout",
+    severity: "medium",
+    cwe: ["CWE-400"],
+    help: "requests has no default timeout: a slow server hangs the worker forever. Pass timeout=(connect, read).",
+    languages: ["python"],
+    category: "quality",
+  },
+  {
+    id: "py/empty-except",
+    title: "Error silently swallowed",
+    severity: "low",
+    cwe: ["CWE-1069"],
+    help: "Catch the specific exception you expect and log it, or explain in a comment why ignoring it is safe.",
+    languages: ["python"],
+    category: "quality",
   },
 ];
 

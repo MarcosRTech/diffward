@@ -3,24 +3,37 @@
 ```console
 $ diffward --diff origin/main
 
+Security
+
  CRITICAL  js/sql-injection src/routes/users.ts:42:9
   SQL query built from dynamic strings (query()).
   │ return db.query(`SELECT * FROM users WHERE id = ${req.query.id}`);
   fix: Use parameterized queries (placeholders such as ? or $1 with a values array) or a tagged-template SQL helper instead of concatenation/interpolation.
 
- HIGH  GHSA-35jh-r3h4-6jhm package-lock.json:1187
-  lodash@4.17.20 (npm) is affected by GHSA-35jh-r3h4-6jhm / CVE-2021-23337: Command Injection in lodash. Upgrade to 4.17.21 or later.
-  fix: Upgrade lodash to 4.17.21 or later. Details: https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm
+Vulnerable dependencies
 
-diffward: 2 finding(s): 1 critical, 1 high (changed code; 14 file(s), 3 package(s) in 1 lockfile(s)).
+ HIGH  lodash@4.17.20 npm · direct · production · package-lock.json:1187
+  1 advisory (1 high) — upgrade to 4.17.21 or later
+  fix: npm install lodash@^4.17.21
+  · GHSA-35jh-r3h4-6jhm  high     Command Injection in lodash
+
+Quality
+
+ MEDIUM  js/http-no-timeout src/integrations/payments.ts:18:22
+  Outbound HTTP call without a timeout (axios.post()).
+  │ const res = await axios.post(`${PSP_URL}/charges`, body);
+  fix: A slow partner keeps the request (and its socket) open indefinitely and piles up concurrent requests. Pass `timeout` (axios) or `signal: AbortSignal.timeout(ms)` (fetch), or set it once on the axios instance.
+
+diffward: 1 security, 1 vulnerable package(s), 1 quality — fails the build: 1 code finding(s) and 1 package(s) (changed code; 14 file(s), 3 package(s) in 1 lockfile(s)).
 $ echo $?
 1
 ```
 
-**diffward** is a free, zero-config security check for pull requests. It looks only at what the PR changes and reports two kinds of problems:
+**diffward** is a free, zero-config security check for pull requests. It looks only at what the PR changes and reports three kinds of problems:
 
-- **Vulnerable dependencies** — packages the PR adds or upgrades in a lockfile that have a known advisory (CVE/GHSA), checked against the free [OSV.dev](https://osv.dev) database.
-- **Insecure code** — SQL/command/code injection, path traversal, SSRF, XSS, hardcoded secrets, unsafe deserialization, weak crypto and disabled TLS verification in the lines the PR adds, for JavaScript/TypeScript and Python.
+- **Vulnerable dependencies** — packages the PR adds or upgrades in a lockfile that have a known advisory (CVE/GHSA), checked against the free [OSV.dev](https://osv.dev) database, grouped by package with the command that fixes them.
+- **Insecure code** — SQL/command/code injection, path traversal, SSRF, XSS, hardcoded secrets, sensitive data in logs, unsafe deserialization, weak crypto and disabled TLS verification in the lines the PR adds, for JavaScript/TypeScript and Python.
+- **Bad practices that cause outages** — HTTP calls without a timeout, queries without a filter or limit, N+1 calls in loops, unhandled promises, swallowed errors and blocking calls in request handlers. Reported, but they only fail the build if you ask.
 
 Old problems already on `main` don't block the PR; new ones do. Results come as readable text, Markdown (job summary / PR comment), JSON, or SARIF for GitHub Code Scanning.
 
@@ -41,6 +54,7 @@ diffward                          # full scan of the current repository
 diffward --diff origin/main       # only what this branch introduces (incl. uncommitted edits)
 diffward --diff origin/main --fail-on critical --sarif diffward.sarif
 git diff main... | diffward --diff-file -   # from a patch, no git history needed
+diffward baseline                 # adopting on an old project: accept what exists today
 ```
 
 With [Bun](https://bun.sh) you can also run it from source: `git clone https://github.com/MarcosRTech/diffward && cd diffward && bun install && bun src/cli.ts <path>`.
@@ -81,6 +95,7 @@ On `pull_request` events the action diffs against the PR base automatically and 
 | Input | Default | |
 |---|---|---|
 | `fail-on` | `high` | `critical`, `high`, `medium`, `low`, `info` or `none` |
+| `fail-on-quality` | `none` | Same scale, for quality (bad-practice) findings |
 | `diff-base` | PR base SHA | Any ref/SHA; empty outside PRs means a full scan |
 | `path` | `.` | Directory to scan |
 | `sarif-file` | `diffward.sarif` | Empty to skip |
@@ -114,7 +129,13 @@ GitLab can ingest the SARIF file, and Azure DevOps, Jenkins (Warnings NG) and So
 | Packagist | `composer.lock` |
 | RubyGems | `Gemfile.lock` |
 
-In diff mode only packages that are **new or changed** relative to the base branch are checked, so a PR is not blamed for advisories published against code it didn't touch (`--deps-scope all` changes that). Severity comes from the GitHub-reviewed label when present, otherwise from the CVSS v3 base score. Each finding names the smallest fixed version above the one you have.
+In diff mode only packages that are **new or changed** relative to the base branch are checked, so a PR is not blamed for advisories published against code it didn't touch (`--deps-scope all` changes that). Severity comes from the GitHub-reviewed label when present, otherwise from the CVSS v3 base score.
+
+Findings are grouped per package, and diffward reads the dependency graph in the lockfile (npm, bun, yarn incl. workspaces, pnpm; Pipfile, poetry, `requirements-dev.txt`) to say for each one:
+
+- **production or dev only** — vulnerabilities in packages only reachable from `devDependencies` are shown but **don't fail the build** unless you pass `--fail-on-dev`;
+- **direct or transitive**, and for transitive ones **which direct dependency pulls it in**;
+- **how to fix it**: the smallest version that closes every advisory, as a command for your package manager (`bun add next@^16.4.1`, `poetry add "django>=5.2.15"`…) or, for transitive packages, the dependency to update or the `overrides`/`resolutions` entry to add.
 
 Only package names, versions and ecosystems are sent to `api.osv.dev`. Your code never leaves the machine. Use `--osv-url` (or `DIFFWARD_OSV_URL`) to point at a mirror. If OSV can't be reached the run fails with exit code 2 instead of passing silently.
 
@@ -129,7 +150,23 @@ JavaScript/TypeScript (`.js .jsx .ts .tsx .mjs .cjs .mts .cts`) is parsed into a
 | Secrets | `secret/known-token` (AWS, GitHub, GitLab, Slack, Stripe, Google, OpenAI, Anthropic, npm, SendGrid, connection strings…), `secret/private-key`, `secret/hardcoded-password` |
 | Deserialization | `js/insecure-deserialization`, `py/insecure-deserialization` (pickle, yaml.load, marshal, torch.load…) |
 | Crypto / transport | `*/weak-hash`, `*/weak-cipher`, `*/insecure-random`, `*/tls-verification-disabled`, `js/jwt-none-algorithm` |
+| Data exposure | `js/sensitive-log`, `py/sensitive-log` (passwords, tokens, CPF/card numbers, whole request bodies/headers/cookies in logs) |
 | Misc | `py/debug-enabled`, `py/insecure-tempfile` |
+
+SQL is also checked when it is passed inside an options object (`bigquery.query({ query })`, `pg.query({ text, values })`), including through a local `const options = { ... }`.
+
+### Bad practices (quality)
+
+| Rule | What it catches |
+|---|---|
+| `js/http-no-timeout`, `py/http-no-timeout` | axios / fetch / requests calls (and `axios.create`) without a timeout, in server code |
+| `js/unbounded-query` | Prisma `findMany`, TypeORM `find`, Sequelize `findAll` with no `where` and no `take`/`limit` |
+| `js/await-in-loop` | A database or HTTP call awaited on every iteration of a loop (N+1) |
+| `js/floating-promise` | An async function called without `await`/`.catch`, and `forEach(async ...)`, in server code |
+| `js/empty-catch`, `py/empty-except` | `catch {}` / `except: pass` with no comment explaining why |
+| `js/sync-io-in-handler` | `readFileSync`, `pbkdf2Sync`, `execSync`… inside a request handler |
+
+They are tuned to stay quiet where the pattern is normal: browser code for timeouts and promises, seeds/migrations/scripts for loops, chunked `createMany` batches, and a project's own `service.findMany(filters)` wrappers. Quality findings don't fail the build by default; use `--fail-on-quality medium` (or `"failOnQuality"` in the config) once a project is clean.
 
 Full list with CWE and fix guidance: [docs/rules.md](docs/rules.md) or `diffward --list-rules`.
 
@@ -141,9 +178,20 @@ Full list with CWE and fix guidance: [docs/rules.md](docs/rules.md) or `diffward
 
 | Code | Meaning |
 |---|---|
-| `0` | No finding at or above `--fail-on` |
-| `1` | At least one finding at or above `--fail-on` (default `high`) |
+| `0` | Nothing reached a fail threshold |
+| `1` | A security finding or production dependency at/above `--fail-on` (default `high`), a quality finding at/above `--fail-on-quality` (default `none`), or a dev dependency when `--fail-on-dev` is set |
 | `2` | Usage error, unreadable config, git error, or OSV unreachable |
+
+## Adopting on an existing project
+
+A first full scan of an old codebase can list hundreds of findings. Record them once and commit the file:
+
+```sh
+diffward baseline            # writes .diffward-baseline.json
+git add .diffward-baseline.json
+```
+
+From then on every scan (full or `--diff`) hides the findings in the baseline and reports only new ones, so you can gate on `--fail-on high` from day one and burn the old list down over time. Entries are matched by rule, file and line text (or package@version), so they survive code moving around but not the code itself changing. `--no-baseline` shows everything again.
 
 ## Configuration
 
@@ -152,6 +200,10 @@ Optional `.diffward.json` at the repository root (lines starting with `//` are a
 ```jsonc
 {
   "failOn": "high",
+  "failOnQuality": "none",          // e.g. "medium" once the project is clean
+  "failOnDev": false,               // let dev-only dependencies fail the build
+  "quality": true,                  // false turns the quality rules off
+  "baseline": ".diffward-baseline.json",
   "ignorePaths": ["migrations/", "scripts/one-off/**"],
   "includeTests": false,
   "rules": {
@@ -182,15 +234,19 @@ eval(trustedBuildTimeSnippet);
 
 ```
 diffward [scan] [path] [options]
+diffward baseline [path]  Record current findings so only new ones are reported
 
   --diff <ref>            Only report issues introduced since the merge-base with <ref>
   --diff-file <file|->    Same, from a unified diff file (or stdin) instead of git
-  --no-code / --no-deps   Skip one of the analyses
+  --no-code / --no-deps / --no-quality   Skip one of the analyses
   --deps-scope <s>        changed | all (default: changed with --diff, all otherwise)
+  --no-baseline           Ignore the baseline file
   --format <f>            text | json | sarif | markdown for stdout (default: text)
   -o, --output <file>     Write the --format output to a file
   --sarif / --markdown / --json <file>   Also write that format to a file
-  --fail-on <severity>    critical | high | medium | low | info | none (default: high)
+  --fail-on <severity>    Security threshold: critical | high | medium | low | info | none (default: high)
+  --fail-on-quality <s>   Quality threshold (default: none)
+  --fail-on-dev           Count dev-only dependencies against --fail-on
   --config <file>         Config file (default: <repo>/.diffward.json)
   --osv-url <url>         OSV API base URL (env DIFFWARD_OSV_URL)
   --list-rules            Print the code rules

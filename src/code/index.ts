@@ -53,6 +53,7 @@ export function scanCode(file: string, text: string): Finding[] {
     if (snippet.length > 200) snippet = `${snippet.slice(0, 200)}…`;
     findings.push({
       kind: "code",
+      category: meta.category ?? "security",
       ruleId: r.ruleId,
       severity: r.severity ?? meta.severity,
       title: meta.title,

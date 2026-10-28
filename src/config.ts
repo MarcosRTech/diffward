@@ -13,6 +13,14 @@ export interface IgnoredVuln {
 
 export interface Config {
   failOn?: Severity | "none";
+  /** Threshold for quality (bad-practice) findings. Default "none": they never fail the build. */
+  failOnQuality?: Severity | "none";
+  /** Let vulnerabilities in dev-only dependencies fail the build. Default false. */
+  failOnDev?: boolean;
+  /** Run the quality rules. Default true. */
+  quality?: boolean;
+  /** Baseline file (relative to the repo root). Default ".diffward-baseline.json". */
+  baseline?: string;
   /** Glob patterns (gitignore style) of paths to skip. */
   ignorePaths?: string[];
   /** Run code rules on test files too (secrets are always checked). Default false. */
@@ -45,16 +53,33 @@ function validate(raw: unknown, path: string): Config {
   };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("must be a JSON object");
   const c = raw as Record<string, unknown>;
-  const known = new Set(["$schema", "failOn", "ignorePaths", "includeTests", "rules", "ignoreVulnerabilities"]);
+  const known = new Set([
+    "$schema",
+    "failOn",
+    "failOnQuality",
+    "failOnDev",
+    "quality",
+    "baseline",
+    "ignorePaths",
+    "includeTests",
+    "rules",
+    "ignoreVulnerabilities",
+  ]);
   for (const k of Object.keys(c)) if (!known.has(k)) fail(`unknown key "${k}"`);
 
-  if (c.failOn !== undefined && !(c.failOn === "none" || (typeof c.failOn === "string" && isSeverity(c.failOn)))) {
-    fail(`failOn must be one of critical, high, medium, low, info, none`);
+  for (const key of ["failOn", "failOnQuality"] as const) {
+    const v = c[key];
+    if (v !== undefined && !(v === "none" || (typeof v === "string" && isSeverity(v)))) {
+      fail(`${key} must be one of critical, high, medium, low, info, none`);
+    }
   }
+  for (const key of ["failOnDev", "quality", "includeTests"] as const) {
+    if (c[key] !== undefined && typeof c[key] !== "boolean") fail(`${key} must be true or false`);
+  }
+  if (c.baseline !== undefined && typeof c.baseline !== "string") fail("baseline must be a path");
   if (c.ignorePaths !== undefined && !(Array.isArray(c.ignorePaths) && c.ignorePaths.every((p) => typeof p === "string"))) {
     fail("ignorePaths must be an array of strings");
   }
-  if (c.includeTests !== undefined && typeof c.includeTests !== "boolean") fail("includeTests must be true or false");
   if (c.rules !== undefined) {
     if (typeof c.rules !== "object" || c.rules === null) fail("rules must be an object");
     for (const [id, v] of Object.entries(c.rules as object)) {

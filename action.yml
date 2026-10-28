@@ -17,6 +17,9 @@ inputs:
   fail-on:
     description: Fail the step when a finding is at or above this severity (critical, high, medium, low, info, none).
     default: high
+  fail-on-quality:
+    description: Also fail on quality (bad-practice) findings at or above this severity. Default none.
+    default: none
   sarif-file:
     description: Where to write the SARIF report (empty to skip).
     default: diffward.sarif
@@ -63,6 +66,7 @@ runs:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_DIFF_BASE: ${{ inputs.diff-base }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_FAIL_ON_QUALITY: ${{ inputs.fail-on-quality }}
         INPUT_SARIF: ${{ inputs.sarif-file }}
         INPUT_CODE: ${{ inputs.code }}
         INPUT_DEPS: ${{ inputs.deps }}
@@ -70,7 +74,7 @@ runs:
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: |
         set -uo pipefail
-        args=("$INPUT_PATH" --fail-on "$INPUT_FAIL_ON" --json "$RUNNER_TEMP/diffward.json" --markdown "$RUNNER_TEMP/diffward.md")
+        args=("$INPUT_PATH" --fail-on "$INPUT_FAIL_ON" --fail-on-quality "$INPUT_FAIL_ON_QUALITY" --json "$RUNNER_TEMP/diffward.json" --markdown "$RUNNER_TEMP/diffward.md")
 
         base="${INPUT_DIFF_BASE:-$PR_BASE_SHA}"
         if [ -n "$base" ]; then

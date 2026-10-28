@@ -18,6 +18,8 @@ export interface ScanOptions {
   diffPatch?: string;
   code: boolean;
   deps: boolean;
+  /** Run quality (bad-practice) rules in addition to security rules. */
+  quality: boolean;
   /** "changed": only packages added/updated by the diff. Defaults to "changed" in diff mode. */
   depsScope?: "changed" | "all";
   osv: OsvClient;
@@ -32,6 +34,8 @@ export interface ScanResult {
   lockfiles: string[];
   packagesChecked: number;
   suppressed: number;
+  /** Findings hidden because they are in the baseline (set by the caller). */
+  baselined: number;
 }
 
 const ALWAYS_IGNORED = [
@@ -101,6 +105,7 @@ export async function scan(opts: ScanOptions): Promise<ScanResult> {
       for (const f of scanCode(file, read(file))) {
         // Real credentials leak from tests too; generic "password = ..." in tests is almost always fake.
         if (isTest && f.ruleId !== "secret/known-token" && f.ruleId !== "secret/private-key") continue;
+        if (!opts.quality && f.category === "quality") continue;
         if (!lines || lines.has(f.line)) findings.push(f);
       }
     }
@@ -114,6 +119,7 @@ export async function scan(opts: ScanOptions): Promise<ScanResult> {
     const res = await scanDependencies({
       files: candidates,
       read,
+      allFiles: existing,
       readBase: scope === "changed" && mergeBase ? (f) => readFileAtRevision(root, mergeBase!, f) : undefined,
       osv: opts.osv,
     });
@@ -142,6 +148,7 @@ export async function scan(opts: ScanOptions): Promise<ScanResult> {
     lockfiles,
     packagesChecked,
     suppressed,
+    baselined: 0,
   };
 }
 

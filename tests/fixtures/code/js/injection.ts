@@ -123,3 +123,18 @@ Function("r", "regeneratorRuntime = r")(globalThis);
 export const inline = (req: any) =>
   // ruleid: js/command-injection critical
   require("child_process").exec(`ls ${req.query.dir}`);
+
+declare const bigquery: any;
+declare const pg: any;
+export async function report(table: string, from: string) {
+  // ruleid: js/sql-injection high
+  await bigquery.query({ query: `SELECT * FROM ${table} WHERE day >= '${from}'` });
+  const options = { query: `SELECT * FROM events WHERE day >= ${from}`, location: "US" };
+  // ruleid: js/sql-injection high
+  await bigquery.query(options);
+  // ok: js/sql-injection
+  await bigquery.query({ query: "SELECT * FROM events WHERE day >= @from", params: { from } });
+  // Identifier in the text but values bound: stays at the default.
+  // ruleid: js/sql-injection medium
+  await pg.query({ text: `SELECT * FROM ${table} WHERE id = $1`, values: [from] });
+}

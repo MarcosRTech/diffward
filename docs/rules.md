@@ -7,201 +7,275 @@ request data in the same function → **critical**, a parameter of the enclosing
 any other non-constant string → the default shown below. Dependency findings use the advisory's
 own severity (GitHub reviewed label, else CVSS v3 base score).
 
-| Rule | Default | CWE | Languages |
-|---|---|---|---|
-| [`secret/known-token`](#secretknown-token) | critical | CWE-798 | any |
-| [`secret/private-key`](#secretprivate-key) | critical | CWE-321 | any |
-| [`secret/hardcoded-password`](#secrethardcoded-password) | medium | CWE-798 | javascript, python |
-| [`js/sql-injection`](#jssql-injection) | medium | CWE-89 | javascript |
-| [`js/command-injection`](#jscommand-injection) | medium | CWE-78 | javascript |
-| [`js/code-injection`](#jscode-injection) | high | CWE-94, CWE-95 | javascript |
-| [`js/path-traversal`](#jspath-traversal) | high | CWE-22 | javascript |
-| [`js/ssrf`](#jsssrf) | high | CWE-918 | javascript |
-| [`js/open-redirect`](#jsopen-redirect) | medium | CWE-601 | javascript |
-| [`js/xss`](#jsxss) | medium | CWE-79 | javascript |
-| [`js/insecure-deserialization`](#jsinsecure-deserialization) | critical | CWE-502 | javascript |
-| [`js/weak-hash`](#jsweak-hash) | low | CWE-328 | javascript |
-| [`js/weak-cipher`](#jsweak-cipher) | high | CWE-327 | javascript |
-| [`js/insecure-random`](#jsinsecure-random) | medium | CWE-338 | javascript |
-| [`js/tls-verification-disabled`](#jstls-verification-disabled) | high | CWE-295 | javascript |
-| [`js/jwt-none-algorithm`](#jsjwt-none-algorithm) | high | CWE-347 | javascript |
-| [`py/sql-injection`](#pysql-injection) | medium | CWE-89 | python |
-| [`py/command-injection`](#pycommand-injection) | medium | CWE-78 | python |
-| [`py/code-injection`](#pycode-injection) | high | CWE-94, CWE-95 | python |
-| [`py/insecure-deserialization`](#pyinsecure-deserialization) | high | CWE-502 | python |
-| [`py/path-traversal`](#pypath-traversal) | high | CWE-22 | python |
-| [`py/ssrf`](#pyssrf) | high | CWE-918 | python |
-| [`py/weak-hash`](#pyweak-hash) | low | CWE-328 | python |
-| [`py/weak-cipher`](#pyweak-cipher) | high | CWE-327 | python |
-| [`py/tls-verification-disabled`](#pytls-verification-disabled) | high | CWE-295 | python |
-| [`py/debug-enabled`](#pydebug-enabled) | medium | CWE-489 | python |
-| [`py/insecure-random`](#pyinsecure-random) | medium | CWE-338 | python |
-| [`py/insecure-tempfile`](#pyinsecure-tempfile) | low | CWE-377 | python |
+**Security** rules fail the build at `--fail-on` (default `high`). **Quality** rules point at
+bad practices that cause outages rather than exploits; they are reported but only fail the build
+with `--fail-on-quality`.
+
+| Rule | Category | Default | CWE | Languages |
+|---|---|---|---|---|
+| [`secret/known-token`](#secretknown-token) | security | critical | CWE-798 | any |
+| [`secret/private-key`](#secretprivate-key) | security | critical | CWE-321 | any |
+| [`secret/hardcoded-password`](#secrethardcoded-password) | security | medium | CWE-798 | javascript, python |
+| [`js/sql-injection`](#jssql-injection) | security | medium | CWE-89 | javascript |
+| [`js/command-injection`](#jscommand-injection) | security | medium | CWE-78 | javascript |
+| [`js/code-injection`](#jscode-injection) | security | high | CWE-94, CWE-95 | javascript |
+| [`js/path-traversal`](#jspath-traversal) | security | high | CWE-22 | javascript |
+| [`js/ssrf`](#jsssrf) | security | high | CWE-918 | javascript |
+| [`js/open-redirect`](#jsopen-redirect) | security | medium | CWE-601 | javascript |
+| [`js/xss`](#jsxss) | security | medium | CWE-79 | javascript |
+| [`js/insecure-deserialization`](#jsinsecure-deserialization) | security | critical | CWE-502 | javascript |
+| [`js/weak-hash`](#jsweak-hash) | security | low | CWE-328 | javascript |
+| [`js/weak-cipher`](#jsweak-cipher) | security | high | CWE-327 | javascript |
+| [`js/insecure-random`](#jsinsecure-random) | security | medium | CWE-338 | javascript |
+| [`js/tls-verification-disabled`](#jstls-verification-disabled) | security | high | CWE-295 | javascript |
+| [`js/jwt-none-algorithm`](#jsjwt-none-algorithm) | security | high | CWE-347 | javascript |
+| [`py/sql-injection`](#pysql-injection) | security | medium | CWE-89 | python |
+| [`py/command-injection`](#pycommand-injection) | security | medium | CWE-78 | python |
+| [`py/code-injection`](#pycode-injection) | security | high | CWE-94, CWE-95 | python |
+| [`py/insecure-deserialization`](#pyinsecure-deserialization) | security | high | CWE-502 | python |
+| [`py/path-traversal`](#pypath-traversal) | security | high | CWE-22 | python |
+| [`py/ssrf`](#pyssrf) | security | high | CWE-918 | python |
+| [`py/weak-hash`](#pyweak-hash) | security | low | CWE-328 | python |
+| [`py/weak-cipher`](#pyweak-cipher) | security | high | CWE-327 | python |
+| [`py/tls-verification-disabled`](#pytls-verification-disabled) | security | high | CWE-295 | python |
+| [`py/debug-enabled`](#pydebug-enabled) | security | medium | CWE-489 | python |
+| [`py/insecure-random`](#pyinsecure-random) | security | medium | CWE-338 | python |
+| [`py/insecure-tempfile`](#pyinsecure-tempfile) | security | low | CWE-377 | python |
+| [`js/sensitive-log`](#jssensitive-log) | security | medium | CWE-532 | javascript |
+| [`py/sensitive-log`](#pysensitive-log) | security | medium | CWE-532 | python |
+| [`js/http-no-timeout`](#jshttp-no-timeout) | quality | medium | CWE-400 | javascript |
+| [`js/unbounded-query`](#jsunbounded-query) | quality | medium | CWE-770 | javascript |
+| [`js/await-in-loop`](#jsawait-in-loop) | quality | low | CWE-1050 | javascript |
+| [`js/floating-promise`](#jsfloating-promise) | quality | low | CWE-754 | javascript |
+| [`js/empty-catch`](#jsempty-catch) | quality | low | CWE-1069 | javascript |
+| [`js/sync-io-in-handler`](#jssync-io-in-handler) | quality | low | CWE-1050 | javascript |
+| [`py/http-no-timeout`](#pyhttp-no-timeout) | quality | medium | CWE-400 | python |
+| [`py/empty-except`](#pyempty-except) | quality | low | CWE-1069 | python |
 
 ### secret/known-token
 
-**Hardcoded credential** — default severity `critical`, CWE-798.
+**Hardcoded credential** — security, default severity `critical`, CWE-798.
 
 Revoke the credential now (it is in git history), then load it from the environment or a secret manager.
 
 ### secret/private-key
 
-**Private key committed to the repository** — default severity `critical`, CWE-321.
+**Private key committed to the repository** — security, default severity `critical`, CWE-321.
 
 Rotate the key pair and keep private keys out of source control (secret manager, CI secrets, KMS).
 
 ### secret/hardcoded-password
 
-**Hardcoded password or secret** — default severity `medium`, CWE-798.
+**Hardcoded password or secret** — security, default severity `medium`, CWE-798.
 
 Read the value from configuration or a secret manager instead of the source code.
 
 ### js/sql-injection
 
-**SQL query built from dynamic strings** — default severity `medium`, CWE-89.
+**SQL query built from dynamic strings** — security, default severity `medium`, CWE-89.
 
 Use parameterized queries (placeholders such as ? or $1 with a values array) or a tagged-template SQL helper instead of concatenation/interpolation.
 
 ### js/command-injection
 
-**Shell command built from dynamic strings** — default severity `medium`, CWE-78.
+**Shell command built from dynamic strings** — security, default severity `medium`, CWE-78.
 
 Use execFile/spawn with an argument array and without `shell: true`; never interpolate input into a shell string.
 
 ### js/code-injection
 
-**Dynamic code evaluation** — default severity `high`, CWE-94, CWE-95.
+**Dynamic code evaluation** — security, default severity `high`, CWE-94, CWE-95.
 
 Avoid eval/new Function/vm on non-constant strings. Parse data with JSON.parse or use a lookup table.
 
 ### js/path-traversal
 
-**File system path controlled by request data** — default severity `high`, CWE-22.
+**File system path controlled by request data** — security, default severity `high`, CWE-22.
 
 Resolve the path against a fixed base directory and reject it unless it still starts with that base (path.resolve + startsWith), or map ids to files server-side.
 
 ### js/ssrf
 
-**Outbound request to a URL controlled by request data** — default severity `high`, CWE-918.
+**Outbound request to a URL controlled by request data** — security, default severity `high`, CWE-918.
 
 Validate the destination against an allow-list of hosts and block private/link-local addresses before making the request.
 
 ### js/open-redirect
 
-**Redirect to a URL controlled by request data** — default severity `medium`, CWE-601.
+**Redirect to a URL controlled by request data** — security, default severity `medium`, CWE-601.
 
 Redirect only to relative paths or to an allow-list of known hosts.
 
 ### js/xss
 
-**HTML sink with dynamic content** — default severity `medium`, CWE-79.
+**HTML sink with dynamic content** — security, default severity `medium`, CWE-79.
 
 Use textContent or framework escaping. If HTML is required, sanitize it (e.g. DOMPurify) right before rendering.
 
 ### js/insecure-deserialization
 
-**Unsafe deserialization** — default severity `critical`, CWE-502.
+**Unsafe deserialization** — security, default severity `critical`, CWE-502.
 
 node-serialize executes functions embedded in the payload. Use JSON.parse and validate the result with a schema.
 
 ### js/weak-hash
 
-**Weak hash algorithm (MD5/SHA-1)** — default severity `low`, CWE-328.
+**Weak hash algorithm (MD5/SHA-1)** — security, default severity `low`, CWE-328.
 
 Use SHA-256 or better for integrity, and a password hash (argon2, scrypt, bcrypt) for passwords. Ignore this finding if the hash is not used for security.
 
 ### js/weak-cipher
 
-**Broken or weak cipher** — default severity `high`, CWE-327.
+**Broken or weak cipher** — security, default severity `high`, CWE-327.
 
 Use AES-256-GCM or ChaCha20-Poly1305 with a random IV. DES, 3DES, RC4, Blowfish and ECB mode are not safe.
 
 ### js/insecure-random
 
-**Math.random() used for a security value** — default severity `medium`, CWE-338.
+**Math.random() used for a security value** — security, default severity `medium`, CWE-338.
 
 Use crypto.randomBytes, crypto.randomUUID or crypto.getRandomValues for tokens, ids, passwords and nonces.
 
 ### js/tls-verification-disabled
 
-**TLS certificate verification disabled** — default severity `high`, CWE-295.
+**TLS certificate verification disabled** — security, default severity `high`, CWE-295.
 
 Keep certificate verification on. For private CAs, pass the CA bundle (`ca` option / NODE_EXTRA_CA_CERTS) instead.
 
 ### js/jwt-none-algorithm
 
-**JWT accepts the 'none' algorithm** — default severity `high`, CWE-347.
+**JWT accepts the 'none' algorithm** — security, default severity `high`, CWE-347.
 
 Pin the expected algorithms explicitly (e.g. algorithms: ['RS256']) and never allow 'none'.
 
 ### py/sql-injection
 
-**SQL query built with string formatting** — default severity `medium`, CWE-89.
+**SQL query built with string formatting** — security, default severity `medium`, CWE-89.
 
 Pass parameters separately: cursor.execute("... WHERE id = %s", (user_id,)) or SQLAlchemy bound parameters.
 
 ### py/command-injection
 
-**Shell command built from dynamic strings** — default severity `medium`, CWE-78.
+**Shell command built from dynamic strings** — security, default severity `medium`, CWE-78.
 
 Use subprocess.run([...]) with a list of arguments and shell=False; avoid os.system/os.popen.
 
 ### py/code-injection
 
-**Dynamic code evaluation** — default severity `high`, CWE-94, CWE-95.
+**Dynamic code evaluation** — security, default severity `high`, CWE-94, CWE-95.
 
 Avoid eval/exec on non-constant strings. Use ast.literal_eval for literals or json.loads for data.
 
 ### py/insecure-deserialization
 
-**Unsafe deserialization** — default severity `high`, CWE-502.
+**Unsafe deserialization** — security, default severity `high`, CWE-502.
 
 pickle/marshal/shelve/yaml.load can execute code. Use json, or yaml.safe_load, for untrusted data.
 
 ### py/path-traversal
 
-**File system path controlled by request data** — default severity `high`, CWE-22.
+**File system path controlled by request data** — security, default severity `high`, CWE-22.
 
 Use werkzeug.utils.safe_join / send_from_directory, or resolve the path and check it stays inside the base directory.
 
 ### py/ssrf
 
-**Outbound request to a URL controlled by request data** — default severity `high`, CWE-918.
+**Outbound request to a URL controlled by request data** — security, default severity `high`, CWE-918.
 
 Validate the destination host against an allow-list and block private/link-local addresses.
 
 ### py/weak-hash
 
-**Weak hash algorithm (MD5/SHA-1)** — default severity `low`, CWE-328.
+**Weak hash algorithm (MD5/SHA-1)** — security, default severity `low`, CWE-328.
 
 Use hashlib.sha256 or better; for non-security uses pass usedforsecurity=False to make the intent explicit.
 
 ### py/weak-cipher
 
-**Broken or weak cipher** — default severity `high`, CWE-327.
+**Broken or weak cipher** — security, default severity `high`, CWE-327.
 
 Use AES-GCM (cryptography's AESGCM) or ChaCha20-Poly1305. DES, 3DES, RC4, Blowfish and ECB mode are not safe.
 
 ### py/tls-verification-disabled
 
-**TLS certificate verification disabled** — default severity `high`, CWE-295.
+**TLS certificate verification disabled** — security, default severity `high`, CWE-295.
 
 Remove verify=False / unverified SSL contexts. For private CAs, pass verify='/path/to/ca.pem'.
 
 ### py/debug-enabled
 
-**Debug mode enabled** — default severity `medium`, CWE-489.
+**Debug mode enabled** — security, default severity `medium`, CWE-489.
 
 The Flask/Werkzeug debugger allows remote code execution. Drive debug from an environment variable that is off in production.
 
 ### py/insecure-random
 
-**random module used for a security value** — default severity `medium`, CWE-338.
+**random module used for a security value** — security, default severity `medium`, CWE-338.
 
 Use the secrets module (secrets.token_hex, secrets.token_urlsafe, secrets.choice) for tokens and passwords.
 
 ### py/insecure-tempfile
 
-**Race-prone temporary file (mktemp)** — default severity `low`, CWE-377.
+**Race-prone temporary file (mktemp)** — security, default severity `low`, CWE-377.
 
 Use tempfile.mkstemp() or tempfile.NamedTemporaryFile().
+
+### js/sensitive-log
+
+**Sensitive data written to logs** — security, default severity `medium`, CWE-532.
+
+Log identifiers, not credentials or personal data. Drop the field, or mask it (last 4 digits) before logging; never log whole request bodies or headers.
+
+### py/sensitive-log
+
+**Sensitive data written to logs** — security, default severity `medium`, CWE-532.
+
+Log identifiers, not credentials or personal data. Drop the field or mask it before logging.
+
+### js/http-no-timeout
+
+**Outbound HTTP call without a timeout** — quality, default severity `medium`, CWE-400.
+
+A slow partner keeps the request (and its socket) open indefinitely and piles up concurrent requests. Pass `timeout` (axios) or `signal: AbortSignal.timeout(ms)` (fetch), or set it once on the axios instance.
+
+### js/unbounded-query
+
+**Query without a filter or a limit** — quality, default severity `medium`, CWE-770.
+
+Reading a whole table grows with the data until it exhausts memory or blocks the event loop while serializing. Add `where`, and `take`/`limit` with pagination.
+
+### js/await-in-loop
+
+**Database/HTTP call awaited inside a loop (N+1)** — quality, default severity `low`, CWE-1050.
+
+Each iteration waits for a round trip. Batch it (WHERE id IN (...), createMany, a bulk endpoint) or run with bounded concurrency (p-limit).
+
+### js/floating-promise
+
+**Promise neither awaited nor handled** — quality, default severity `low`, CWE-754.
+
+A rejection here is unhandled: errors are lost or crash the process. `await` it, return it, or add `.catch(...)`; `forEach` never waits for async callbacks — use for...of or Promise.all(map(...)).
+
+### js/empty-catch
+
+**Error silently swallowed** — quality, default severity `low`, CWE-1069.
+
+Log the error with context, rethrow it, or leave a comment explaining why ignoring it is safe.
+
+### js/sync-io-in-handler
+
+**Blocking call inside a request handler** — quality, default severity `low`, CWE-1050.
+
+Sync file system, crypto and child_process calls block the event loop for every concurrent request. Use the async/promise versions.
+
+### py/http-no-timeout
+
+**Outbound HTTP call without a timeout** — quality, default severity `medium`, CWE-400.
+
+requests has no default timeout: a slow server hangs the worker forever. Pass timeout=(connect, read).
+
+### py/empty-except
+
+**Error silently swallowed** — quality, default severity `low`, CWE-1069.
+
+Catch the specific exception you expect and log it, or explain in a comment why ignoring it is safe.

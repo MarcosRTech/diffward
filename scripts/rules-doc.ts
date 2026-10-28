@@ -14,14 +14,20 @@ export function renderRulesDoc(): string {
     "any other non-constant string → the default shown below. Dependency findings use the advisory's",
     "own severity (GitHub reviewed label, else CVSS v3 base score).",
     "",
-    "| Rule | Default | CWE | Languages |",
-    "|---|---|---|---|",
+    "**Security** rules fail the build at `--fail-on` (default `high`). **Quality** rules point at",
+    "bad practices that cause outages rather than exploits; they are reported but only fail the build",
+    "with `--fail-on-quality`.",
+    "",
+    "| Rule | Category | Default | CWE | Languages |",
+    "|---|---|---|---|---|",
   ];
   for (const r of RULES.values()) {
-    out.push(`| [\`${r.id}\`](#${r.id.replace(/\//g, "")}) | ${r.severity} | ${r.cwe.join(", ")} | ${r.languages.join(", ")} |`);
+    const cat = r.category ?? "security";
+    out.push(`| [\`${r.id}\`](#${r.id.replace(/\//g, "")}) | ${cat} | ${r.severity} | ${r.cwe.join(", ")} | ${r.languages.join(", ")} |`);
   }
   for (const r of RULES.values()) {
-    out.push("", `### ${r.id}`, "", `**${r.title}** — default severity \`${r.severity}\`, ${r.cwe.join(", ")}.`, "", r.help);
+    const cat = r.category ?? "security";
+    out.push("", `### ${r.id}`, "", `**${r.title}** — ${cat}, default severity \`${r.severity}\`, ${r.cwe.join(", ")}.`, "", r.help);
   }
   return out.join("\n") + "\n";
 }

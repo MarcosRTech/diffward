@@ -137,6 +137,40 @@ describe("cli", () => {
     expect(JSON.parse(r.stdout).findings.map((f: { file: string }) => f.file)).toContain("src/tmp.py");
   });
 
+  test("quality findings are reported but only fail with --fail-on-quality", async () => {
+    write("server/client.ts", 'import axios from "axios";\nexport const get = (url: string) => axios.get(url);\n');
+    const r = await run(["server", "--no-deps", "--format", "json"]);
+    const strict = await run(["server", "--no-deps", "--fail-on-quality", "medium"]);
+    rmSync(join(repo, "server"), { recursive: true, force: true });
+    const out = JSON.parse(r.stdout);
+    expect(out.findings.map((f: { ruleId: string; category: string }) => `${f.category} ${f.ruleId}`)).toEqual([
+      "quality js/http-no-timeout",
+    ]);
+    expect(r.code).toBe(0);
+    expect(strict.code).toBe(1);
+    expect(strict.stdout).toContain("Quality");
+  });
+
+  test("baseline: adopt on an old project, then only new findings count", async () => {
+    const base = await run(["baseline"]);
+    expect(base.code).toBe(0);
+    expect(base.stdout).toMatch(/wrote \d+ finding/);
+
+    const clean = await run([".", "--format", "json"]);
+    expect(clean.code).toBe(0);
+    expect(JSON.parse(clean.stdout).findings).toEqual([]);
+    expect(JSON.parse(clean.stdout).stats.baselined).toBeGreaterThan(0);
+
+    write("src/new.js", 'const cp = require("child_process");\nmodule.exports = (req) => cp.exec("ls " + req.query.dir);\n');
+    const fresh = await run([".", "--no-deps", "--format", "json"]);
+    expect(JSON.parse(fresh.stdout).findings.map((f: { file: string }) => f.file)).toEqual(["src/new.js"]);
+
+    const all = await run([".", "--no-deps", "--no-baseline", "--format", "json"]);
+    expect(JSON.parse(all.stdout).findings.length).toBeGreaterThan(1);
+    rmSync(join(repo, "src/new.js"));
+    rmSync(join(repo, ".diffward-baseline.json"));
+  });
+
   test("markdown summary", async () => {
     const r = await run(["--diff", "main", "--format", "markdown", "--fail-on", "none"]);
     expect(r.stdout).toContain("### diffward — changed code");

@@ -11,7 +11,8 @@ import { scanCode } from "../src/code/index.ts";
  *   // ok: js/sql-injection         → the next line must NOT be reported by that rule
  *
  * Any finding on a line without a `ruleid` marker fails the test, so every
- * fixture doubles as a false-positive check.
+ * fixture doubles as a false-positive check. Files named quality-* hold the
+ * quality rules; the rest hold security rules.
  */
 const ROOT = join(import.meta.dir, "fixtures", "code");
 
@@ -38,7 +39,9 @@ for (const lang of readdirSync(ROOT)) {
       test(file, () => {
         const text = readFileSync(join(ROOT, lang, file), "utf8");
         const { want, ok, severities } = expectations(text);
-        const findings = scanCode(`${lang}/${file}`, text);
+        // quality-*.ext fixtures cover quality rules, the others security rules.
+        const category = file.startsWith("quality-") ? "quality" : "security";
+        const findings = scanCode(`${lang}/${file}`, text).filter((f) => f.category === category);
         const got = findings.map((f) => `${f.ruleId}@${f.line}`);
         const gotSeverity = findings.map((f) => `${f.ruleId}@${f.line}:${f.severity}`);
 

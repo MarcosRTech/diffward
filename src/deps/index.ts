@@ -6,6 +6,8 @@ export interface DependencyScanInput {
   /** Lockfiles to check, relative paths. */
   files: string[];
   read: (file: string) => string;
+  /** Every file in the project (relative paths); used to find workspace manifests. */
+  allFiles?: string[];
   /**
    * When set, only packages that are new or changed compared to this version
    * of each lockfile are checked (returns null if the file did not exist).
@@ -25,7 +27,16 @@ export async function scanDependencies(input: DependencyScanInput): Promise<Depe
   const targets: { file: string; pkg: LockedPackage }[] = [];
 
   for (const file of lockfiles) {
-    let packages = dedupe(parseLockfile(file, input.read(file)));
+    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/") + 1) : "";
+    const sibling = (name: string) => {
+      try {
+        return input.read(dir + name);
+      } catch {
+        return null;
+      }
+    };
+    const files = (input.allFiles ?? []).filter((f) => f.startsWith(dir) && f.endsWith("package.json")).map((f) => f.slice(dir.length));
+    let packages = dedupe(parseLockfile(file, input.read(file), sibling, files));
     if (input.readBase) {
       const before = input.readBase(file);
       if (before !== null) {
@@ -57,6 +68,7 @@ export async function scanDependencies(input: DependencyScanInput): Promise<Depe
       const fix = v.fixedVersions[0];
       findings.push({
         kind: "dependency",
+        category: "security",
         ruleId: v.id,
         severity: v.severity,
         title: v.summary,
@@ -78,6 +90,9 @@ export async function scanDependencies(input: DependencyScanInput): Promise<Depe
           aliases: v.aliases,
           fixedVersions: v.fixedVersions,
           url: v.url,
+          dev: pkg.dev,
+          direct: pkg.direct,
+          via: pkg.via,
         },
       });
     }

@@ -7,14 +7,18 @@ export function normalizePyPI(name: string): string {
 }
 
 /** requirements*.txt — only exact pins (`==` / `===`) can be checked. */
-export function parseRequirements(text: string): LockedPackage[] {
+export function parseRequirements(text: string, path = "requirements.txt"): LockedPackage[] {
   const out: LockedPackage[] = [];
+  // requirements-dev.txt, requirements/test.txt, dev-requirements.txt...
+  const dev = /(?:^|[/_.-])(?:dev|devel|develop|test|tests|testing|lint|docs|ci)(?:[/_.-]|$)/i.test(path.replace(/requirements/gi, ""))
+    ? true
+    : undefined;
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.replace(/\s+#.*$/, "").trim();
     if (!line || line.startsWith("#") || line.startsWith("-")) continue;
     const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*===?\s*([^\s;,\\]+)/.exec(line);
-    if (m) out.push({ ecosystem: "PyPI", name: normalizePyPI(m[1]!), version: m[2]!, line: i + 1 });
+    if (m) out.push({ ecosystem: "PyPI", name: normalizePyPI(m[1]!), version: m[2]!, line: i + 1, dev });
   }
   return out;
 }
@@ -29,7 +33,7 @@ export function parsePipfileLock(text: string): LockedPackage[] {
       const version = info.version?.replace(/^===?/, "");
       if (!version) continue;
       const idx = lines.findIndex((l) => l.includes(`"${name}": {`));
-      out.push({ ecosystem: "PyPI", name: normalizePyPI(name), version, line: idx + 1 || undefined });
+      out.push({ ecosystem: "PyPI", name: normalizePyPI(name), version, line: idx + 1 || undefined, dev: section === "develop" });
     }
   }
   return out;
@@ -46,12 +50,12 @@ export function parseTomlPackageTables(
 ): LockedPackage[] {
   const out: LockedPackage[] = [];
   const lines = text.split("\n");
-  let cur: { name?: string; version?: string; line: number; local: boolean } | null = null;
+  let cur: { name?: string; version?: string; line: number; local: boolean; dev?: boolean } | null = null;
 
   const flush = () => {
     if (cur?.name && cur.version && !(opts.skipLocal && cur.local)) {
       const name = ecosystem === "PyPI" ? normalizePyPI(cur.name) : cur.name;
-      out.push({ ecosystem, name, version: cur.version, line: cur.line });
+      out.push({ ecosystem, name, version: cur.version, line: cur.line, dev: cur.dev });
     }
   };
 
@@ -68,6 +72,11 @@ export function parseTomlPackageTables(
       continue;
     }
     if (!cur) continue;
+    // poetry < 1.2: category = "dev"; poetry >= 1.2: groups = ["dev"] (no "main")
+    const category = /^category\s*=\s*"(\w+)"/.exec(line);
+    if (category) cur.dev = category[1] === "dev";
+    const groups = /^groups\s*=\s*\[(.*)\]/.exec(line);
+    if (groups) cur.dev = !/"main"/.test(groups[1]!);
     const kv = /^(name|version|source)\s*=\s*(.*)$/.exec(line);
     if (!kv) continue;
     const value = kv[2]!.trim();
