@@ -9,7 +9,7 @@ import { createOsvClient, DEFAULT_OSV_URL } from "./deps/osv.ts";
 import { createDiskCache } from "./deps/osv-cache.ts";
 import { gitRoot } from "./diff.ts";
 import { banner, TAGLINE } from "./logo.ts";
-import { createProgressUI, type ProgressUI } from "./ui/progress.ts";
+import { createProgressUI, progressMode, type ProgressUI } from "./ui/progress.ts";
 import { basename, resolve } from "node:path";
 import { failed, type Policy, type Threshold } from "./policy.ts";
 import { toMarkdown } from "./report/markdown.ts";
@@ -43,8 +43,10 @@ Output:
   --markdown <file>       Also write a Markdown summary (PR comment / step summary).
   --json <file>           Also write JSON.
   --no-color              Disable colors (also honors NO_COLOR).
-  --no-progress           Don't show the live progress display (it only appears on
-                          interactive terminals, never in CI or when piped).
+  --progress, --no-progress
+                          Force the live progress display on or off. By default it
+                          appears on interactive terminals (incl. Git Bash), never in
+                          CI or when piped. Env: DIFFWARD_PROGRESS=1|0.
 
 Policy:
   --fail-on <severity>    Exit 1 on a security finding at or above: critical | high |
@@ -90,6 +92,7 @@ async function main(argv: string[]): Promise<number> {
       json: { type: "string" },
       "no-color": { type: "boolean" },
       "no-progress": { type: "boolean" },
+      progress: { type: "boolean" },
       "fail-on": { type: "string" },
       "fail-on-quality": { type: "string" },
       "fail-on-dev": { type: "boolean" },
@@ -148,7 +151,13 @@ async function main(argv: string[]): Promise<number> {
   const diffPatch = values["diff-file"] !== undefined ? readInput(values["diff-file"]) : undefined;
 
   // Live HUD on stderr: interactive terminals only, so CI logs and pipes stay clean.
-  const interactive = Boolean(process.stderr.isTTY) && !process.env.CI && !values["no-progress"];
+  const mode = progressMode(
+    process.env,
+    Boolean(process.stderr.isTTY),
+    values["no-progress"] ? false : values.progress ? true : undefined,
+  );
+  if (process.env.DIFFWARD_DEBUG) process.stderr.write(`diffward: progress display ${mode.on ? "on" : "off"}: ${mode.reason}\n`);
+  const interactive = mode.on;
   const runCode = !values["no-code"];
   const runDeps = !values["no-deps"];
   let ui: ProgressUI | undefined;

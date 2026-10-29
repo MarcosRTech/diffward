@@ -1,6 +1,6 @@
 {
   "name": "diffward",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Security scanner for pull requests: vulnerable dependencies (OSV) and insecure code patterns, scoped to the diff. SARIF output for GitHub Code Scanning.",
   "license": "MIT",
   "type": "module",

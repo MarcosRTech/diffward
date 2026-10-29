@@ -251,7 +251,9 @@ A full scan of a 14,000-file TypeScript monorepo with 4,000 locked packages take
 - **Secrets are pre-filtered per line**: only lines that could contain a credential go through the full set of patterns.
 - In `--diff` mode only the changed files and the new or updated packages are looked at, which usually takes well under a second.
 
-On an interactive terminal diffward shows a live display while it works: the file being analyzed, OSV progress (with how many advisories came from the cache) and finding counters by severity. It is drawn on stderr and erased before the report, so `--format json > out.json` stays clean; it never appears in CI or when output is piped. `--no-progress` turns it off.
+On an interactive terminal diffward shows a live display while it works: the file being analyzed, OSV progress (with how many advisories came from the cache) and finding counters by severity; its final frame stays on screen above the report. It is drawn on stderr, so `--format json > out.json` stays clean.
+
+It turns on for interactive terminals, including Git Bash (mintty), and stays off in CI (`CI` set), with `TERM=dumb`, or when stderr is piped or redirected. `--progress` / `DIFFWARD_PROGRESS=1` force it on, `--no-progress` / `DIFFWARD_PROGRESS=0` off. If it doesn't appear where you expect, `DIFFWARD_DEBUG=1 diffward` prints why.
 
 ## Adopting on an existing project
 
@@ -321,7 +323,7 @@ diffward baseline [path]  Record current findings so only new ones are reported
   --config <file>         Config file (default: <repo>/.diffward.json)
   --osv-url <url>         OSV API base URL (env DIFFWARD_OSV_URL)
   --no-cache              Don't read or write the advisory cache (env DIFFWARD_CACHE_DIR moves it)
-  --no-progress           Hide the live progress display
+  --progress / --no-progress   Force the live progress display on or off
   --list-rules            Print the code rules
   --no-color, -v/--version, -h/--help
 ```

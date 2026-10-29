@@ -28,6 +28,31 @@ const SEVERITY_RGB: Record<Severity, RGB> = {
   info: [150, 150, 150],
 };
 
+/**
+ * Whether to draw the live display, and why (shown with DIFFWARD_DEBUG=1).
+ * Precedence: --no-progress / --progress, then DIFFWARD_PROGRESS, then the
+ * environment. Git Bash's mintty is a real terminal that Node/Bun see as a
+ * pipe, so it is recognized explicitly.
+ */
+export function progressMode(
+  env: NodeJS.ProcessEnv,
+  stderrIsTTY: boolean,
+  flag: boolean | undefined,
+): { on: boolean; reason: string } {
+  if (flag === false) return { on: false, reason: "--no-progress" };
+  if (flag === true) return { on: true, reason: "--progress" };
+  const forced = (env.DIFFWARD_PROGRESS ?? "").toLowerCase();
+  if (/^(?:1|true|yes|always)$/.test(forced)) return { on: true, reason: "DIFFWARD_PROGRESS" };
+  if (/^(?:0|false|no|never)$/.test(forced)) return { on: false, reason: "DIFFWARD_PROGRESS=0" };
+  if (env.TERM === "dumb") return { on: false, reason: "TERM=dumb" };
+  if (env.CI && !/^(?:0|false)$/i.test(env.CI)) return { on: false, reason: "CI is set (use --progress to force it)" };
+  if (stderrIsTTY) return { on: true, reason: "interactive terminal" };
+  if (env.TERM_PROGRAM === "mintty" || (env.MSYSTEM && /xterm|cygwin/.test(env.TERM ?? ""))) {
+    return { on: true, reason: "Git Bash / mintty" };
+  }
+  return { on: false, reason: "stderr is not a terminal (piped or redirected; use --progress to force it)" };
+}
+
 export function colorLevel(env: NodeJS.ProcessEnv = process.env): ColorLevel {
   if (env.NO_COLOR) return 0;
   if (/truecolor|24bit/i.test(env.COLORTERM ?? "")) return 3;
@@ -178,8 +203,8 @@ export function createProgressUI(opts: {
     return fg(level, gradient(frame * 0.03 + offset / 10), SPINNER[(frame + offset) % SPINNER.length]!, true);
   }
 
-  function render(): string[] {
-    const cols = Math.max(40, Math.min(out.columns || 80, 120));
+  function render(final = false): string[] {
+    const cols = Math.max(40, Math.min(out.columns || Number(process.env.COLUMNS) || 80, 120));
     const elapsed = ((Date.now() - started) / 1000).toFixed(1);
     const lines: string[] = [];
 
@@ -199,6 +224,10 @@ export function createProgressUI(opts: {
     const dir = p < track ? -1 : 1;
     let beam = "";
     for (let i = 0; i < track; i++) {
+      if (final) {
+        beam += fg(level, gradient(i / track), "━");
+        continue;
+      }
       const d = (i - head) * dir;
       if (d === 0) beam += fg(level, [255, 255, 255], "█", true);
       else if (d > 0 && d <= 10) beam += fg(level, mix(gradient(i / track + frame * 0.01), [20, 20, 30], d / 11), "▇▆▅▄▃▂▂▁▁▁"[d - 1]!);
@@ -253,10 +282,10 @@ export function createProgressUI(opts: {
     return lines.map((l) => clip(l, cols - 1));
   }
 
-  function draw() {
-    if (stopped) return;
+  function draw(final = false) {
+    if (stopped && !final) return;
     frame++;
-    const lines = render();
+    const lines = render(final);
     let buf = drawn ? `\x1b[${drawn}F` : "";
     for (const l of lines) buf += `\x1b[2K${l}\n`;
     out.write(buf);
@@ -298,7 +327,10 @@ export function createProgressUI(opts: {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
-      erase();
+      // On success the last frame stays on screen (fast scans would otherwise
+      // flash it for a few milliseconds); on errors it is erased.
+      if (summary) draw(true);
+      else erase();
       restore();
       process.off("exit", onExit);
       process.off("SIGINT", onSigint);

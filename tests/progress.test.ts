@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { colorLevel, createProgressUI } from "../src/ui/progress.ts";
+import { colorLevel, createProgressUI, progressMode } from "../src/ui/progress.ts";
 import type { Finding } from "../src/types.ts";
 
 function fakeTerminal() {
@@ -46,4 +46,33 @@ test("color detection", () => {
   expect(colorLevel({ COLORTERM: "truecolor" })).toBe(3);
   expect(colorLevel({ TERM: "xterm-256color" })).toBe(2);
   expect(colorLevel({ TERM: "xterm" })).toBe(1);
+});
+
+test("when the live display turns on, and why", () => {
+  const on = (env: Record<string, string>, tty: boolean, flag?: boolean) => progressMode(env, tty, flag).on;
+  expect(on({}, true)).toBe(true);
+  expect(on({}, false)).toBe(false); // piped / redirected
+  expect(on({ CI: "true" }, true)).toBe(false);
+  expect(on({ CI: "false" }, true)).toBe(true);
+  expect(on({ TERM: "dumb" }, true)).toBe(false);
+  expect(on({ TERM_PROGRAM: "mintty" }, false)).toBe(true); // Git Bash looks like a pipe
+  expect(on({ MSYSTEM: "MINGW64", TERM: "xterm-256color" }, false)).toBe(true);
+  expect(on({ CI: "1" }, false, true)).toBe(true); // --progress wins
+  expect(on({}, true, false)).toBe(false); // --no-progress wins
+  expect(on({ DIFFWARD_PROGRESS: "1" }, false)).toBe(true);
+  expect(on({ DIFFWARD_PROGRESS: "0" }, true)).toBe(false);
+  expect(progressMode({ CI: "1" }, true, undefined).reason).toContain("CI");
+});
+
+test("the final frame stays on screen after a successful scan", async () => {
+  const term = fakeTerminal();
+  const ui = createProgressUI({ stream: term.stream, title: "0.0.0", subtitle: "scanning demo", code: true, deps: false, level: 0 });
+  ui.onProgress({ type: "code", done: 3, total: 3 });
+  ui.onProgress({ type: "code-done", files: 3 });
+  ui.stop("scanned 3 files in 0.0s");
+  const lines = term.text().split("\n");
+  const tail = lines.slice(-12).join("\n");
+  expect(tail).toContain("3 / 3 files");
+  expect(tail).toContain("✔ code");
+  expect(tail).toContain("✔ scanned 3 files in 0.0s");
 });
