@@ -43,7 +43,7 @@ $ echo $?
 **diffward** is a free, zero-config security check for pull requests. It looks only at what the PR changes and reports three kinds of problems:
 
 - **Vulnerable dependencies** — packages the PR adds or upgrades in a lockfile that have a known advisory (CVE/GHSA), checked against the free [OSV.dev](https://osv.dev) database, grouped by package with the command that fixes them.
-- **Insecure code** — SQL/command/code injection, path traversal, SSRF, XSS, hardcoded secrets, sensitive data in logs, unsafe deserialization, weak crypto and disabled TLS verification in the lines the PR adds, for JavaScript/TypeScript and Python.
+- **Insecure code and configuration** — SQL/command/code injection, path traversal, SSRF, XSS, open CORS, sensitive data in logs, unsafe deserialization, weak crypto and disabled TLS in JavaScript/TypeScript and Python; secrets in any committed file (code, `.env`, YAML/JSON, shell, Dockerfiles, docs); script injection and unpinned actions in GitHub Actions workflows; containers running as root.
 - **Bad practices that cause outages** — HTTP calls without a timeout, queries without a filter or limit, N+1 calls in loops, unhandled promises, swallowed errors and blocking calls in request handlers. Reported, but they only fail the build if you ask.
 
 Old problems already on `main` don't block the PR; new ones do. Results come as readable text, Markdown (job summary / PR comment), JSON, or SARIF for GitHub Code Scanning.
@@ -170,19 +170,48 @@ Only package names, versions and ecosystems are sent to `api.osv.dev`. Your code
 
 ### Code
 
-JavaScript/TypeScript (`.js .jsx .ts .tsx .mjs .cjs .mts .cts`) is parsed into an AST with the TypeScript compiler; Python is analyzed statement by statement. Secrets are checked in every text file.
+JavaScript/TypeScript (`.js .jsx .ts .tsx .mjs .cjs .mts .cts`) is parsed into an AST with the TypeScript compiler; Python is analyzed statement by statement.
 
 | Area | Rules |
 |---|---|
 | Injection | `js/sql-injection`, `js/command-injection`, `js/code-injection`, `py/sql-injection`, `py/command-injection`, `py/code-injection` |
 | Request data reaching a sink | `js/path-traversal`, `js/ssrf`, `js/open-redirect`, `js/xss`, `py/path-traversal`, `py/ssrf` |
-| Secrets | `secret/known-token` (AWS, GitHub, GitLab, Slack, Stripe, Google, OpenAI, Anthropic, npm, SendGrid, connection strings…), `secret/private-key`, `secret/hardcoded-password` |
 | Deserialization | `js/insecure-deserialization`, `py/insecure-deserialization` (pickle, yaml.load, marshal, torch.load…) |
-| Crypto / transport | `*/weak-hash`, `*/weak-cipher`, `*/insecure-random`, `*/tls-verification-disabled`, `js/jwt-none-algorithm` |
+| Crypto / transport | `*/weak-hash`, `*/weak-cipher`, `*/insecure-random`, `*/tls-verification-disabled`, `js/jwt-none-algorithm`, `js/gcm-no-tag-length` |
+| Web configuration | `js/cors-any-origin` (`enableCors()`, `cors()`, `Access-Control-Allow-Origin: *`, origin reflected with credentials) |
 | Data exposure | `js/sensitive-log`, `py/sensitive-log` (passwords, tokens, CPF/card numbers, whole request bodies/headers/cookies in logs) |
 | Misc | `py/debug-enabled`, `py/insecure-tempfile` |
 
 SQL is also checked when it is passed inside an options object (`bigquery.query({ query })`, `pg.query({ text, values })`), including through a local `const options = { ... }`.
+
+### Secrets
+
+Checked in every committed text file, with heuristics matched to the kind of file:
+
+| Rule | What it catches | Where |
+|---|---|---|
+| `secret/known-token` | AWS, GitHub, GitLab, Slack, Stripe, Google, OpenAI, Anthropic, npm, SendGrid, Twilio, Telegram, Discord… and passwords inside connection strings | everywhere |
+| `secret/private-key` | `-----BEGIN … PRIVATE KEY-----` | everywhere |
+| `secret/jwt` | Signed JSON Web Tokens (expired ones are reported as low; the jwt.io sample is ignored) | everywhere |
+| `secret/auth-header` | `Authorization: Bearer/Basic/Token …` with a real-looking value (`<token>`, `$TOKEN` are ignored) | everywhere |
+| `secret/env-file` | A committed `.env`, `.env.local`, `.env.production`… with values (`.env.example` is fine) | `.env*` |
+| `secret/hardcoded-password` | `password = "…"`, `API_KEY=…`, `client_secret: …`, `?applicationKey=…` in URLs, literal HMAC keys and JWT signing secrets | code, config (YAML, JSON, `.env`, shell, Dockerfile, Terraform…), URLs in docs |
+
+Values are redacted in every report. Placeholders, variable references (`${VAR}`, `$VAR`, `%VAR%`), labels like `forgot-password` and low-entropy strings are skipped; Markdown and text files only get the unambiguous checks, since examples in docs are usually fake.
+
+### CI/CD and containers
+
+| Rule | What it catches |
+|---|---|
+| `gha/script-injection` | `${{ github.event.pull_request.title }}`, `${{ github.head_ref }}`, comment bodies… pasted into `run:` or `github-script` (critical on `pull_request_target`/`issue_comment` workflows); `${{ inputs.* }}` as medium |
+| `gha/untrusted-checkout` | `pull_request_target` workflows that check out the PR's head ("pwn request") |
+| `gha/unpinned-action` | Third-party actions referenced by a tag instead of a commit SHA (`actions/*` and `github/*` are exempt) |
+| `gha/excessive-permissions` | `permissions: write-all` |
+| `docker/root-user` | The final stage runs as root (no `USER`, or `USER root`); distroless `:nonroot` and Chainguard bases are recognized |
+| `docker/curl-pipe-shell`, `docker/add-remote` | `curl … \| sh` and `ADD https://…` without `--checksum` |
+| `docker/latest-tag` (quality) | Base images without a version or digest |
+
+Secrets in `ENV`/`ARG` lines are covered by the secret rules. Dockerfiles and workflows under `node_modules/` or vendored code are never scanned.
 
 ### Bad practices (quality)
 

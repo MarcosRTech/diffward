@@ -1,0 +1,40 @@
+name: triage
+on:
+  pull_request_target:
+    types: [opened]
+  issue_comment:
+
+# ruleid: gha/excessive-permissions
+permissions: write-all # reviewers asked for labels
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      # ok: gha/unpinned-action
+      - uses: actions/checkout@v4
+        with:
+          # ruleid: gha/untrusted-checkout
+          ref: ${{ github.event.pull_request.head.sha }}
+      # ruleid: gha/unpinned-action
+      - uses: some-org/label-action@v2
+      # ok: gha/unpinned-action
+      - uses: some-org/label-action@3f1c2b4a5d6e7f8091a2b3c4d5e6f708192a3b4c # v2.1.0
+      - name: Greet
+        run: |
+          # ruleid: gha/script-injection critical
+          echo "Thanks for ${{ github.event.pull_request.title }}"
+          # ok: gha/script-injection
+          echo "Run ${{ github.run_id }} on ${{ github.sha }}"
+      - name: Safe greet
+        env:
+          # ok: gha/script-injection
+          TITLE: ${{ github.event.pull_request.title }}
+        run: echo "Thanks for $TITLE"
+      # ruleid: gha/script-injection critical
+      - run: echo "branch ${{ github.head_ref }}"
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // ruleid: gha/script-injection critical
+            const body = `${{ github.event.comment.body }}`;

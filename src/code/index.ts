@@ -1,9 +1,11 @@
 import type { Finding } from "../types.ts";
 import { isLockfile } from "../deps/lockfiles/index.ts";
+import { analyzeWorkflow, isWorkflowFile } from "./ci/github-actions.ts";
+import { analyzeDockerfile, isDockerfile } from "./docker/dockerfile.ts";
 import { analyzeJs } from "./js/analyzer.ts";
 import { analyzePython } from "./python/analyzer.ts";
 import { rule, type RawFinding } from "./rules.ts";
-import { scanSecrets } from "./secrets.ts";
+import { scanEnvFile, scanSecrets, secretScope } from "./secrets.ts";
 
 const JS_EXT = /\.(?:[cm]?[jt]sx?)$/;
 const PY_EXT = /\.pyw?$/;
@@ -27,7 +29,7 @@ export function shouldScanText(file: string): boolean {
 export function scanCode(file: string, text: string): Finding[] {
   if (text.includes("\0")) return []; // binary
   const lang = languageOf(file);
-  const raw: RawFinding[] = scanSecrets(text, { generic: lang !== null });
+  const raw: RawFinding[] = [...scanSecrets(text, { scope: secretScope(file) }), ...scanEnvFile(file, text)];
 
   // Minified/bundled output is not code anyone reviews; only look for secrets in it.
   const generated = lang === "javascript" && isGenerated(text);
@@ -35,6 +37,8 @@ export function scanCode(file: string, text: string): Finding[] {
   try {
     if (lang === "javascript" && !generated) raw.push(...analyzeJs(file, text));
     if (lang === "python") raw.push(...analyzePython(text));
+    if (isWorkflowFile(file)) raw.push(...analyzeWorkflow(text));
+    if (isDockerfile(file)) raw.push(...analyzeDockerfile(text));
   } catch (err) {
     // A parser crash must not hide the other findings; surface it as a warning.
     process.stderr.write(`diffward: warning: could not analyze ${file}: ${(err as Error).message}\n`);

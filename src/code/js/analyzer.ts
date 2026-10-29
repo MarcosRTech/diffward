@@ -17,6 +17,7 @@ import {
   unwrap,
 } from "./ast.ts";
 import { analyzeQuality } from "./quality.ts";
+import { isPlaceholder } from "../secrets.ts";
 
 /**
  * AST rules for JavaScript/TypeScript.
@@ -307,6 +308,13 @@ class JsAnalyzer {
 
   private onPropertyAssignment(node: ts.PropertyAssignment) {
     const key = propName(node.name);
+    // Next.js headers(): { key: "Access-Control-Allow-Origin", value: "*" }
+    if (key === "value" && stringValue(node.initializer) === "*" && ts.isObjectLiteralExpression(node.parent)) {
+      const header = objectProp(node.parent, "key");
+      if (header && stringValue(header)?.toLowerCase() === "access-control-allow-origin") {
+        this.report(node, "js/cors-any-origin", { detail: "Access-Control-Allow-Origin: *" });
+      }
+    }
     if (key === "rejectUnauthorized" && node.initializer.kind === ts.SyntaxKind.FalseKeyword) {
       this.report(node, "js/tls-verification-disabled", { detail: "rejectUnauthorized: false" });
     }
@@ -459,10 +467,61 @@ class JsAnalyzer {
         this.report(node, "js/weak-cipher", { detail: `${last}() derives the key with MD5 and no IV` });
       }
     }
+    if (/(?:^|\.)createDecipheriv$/.test(name)) {
+      // AEAD modes accept truncated tags unless authTagLength is set, which makes forgery feasible.
+      const algo = stringValue(first)?.toLowerCase();
+      const opts = args[3] && ts.isObjectLiteralExpression(unwrap(args[3])) ? (unwrap(args[3]) as ts.ObjectLiteralExpression) : undefined;
+      if (algo && /gcm|ccm|ocb|chacha20-poly1305/.test(algo) && !(opts && objectProp(opts, "authTagLength")) && !(args[3] && !opts)) {
+        this.report(node, "js/gcm-no-tag-length", { detail: algo });
+      }
+    }
     if (/^jsonwebtoken\.verify$|^jwt\.verify$/.test(name) && args[1]) {
       const secret = stringValue(args[1]);
       if (secret === "") this.report(node, "js/jwt-none-algorithm", { detail: "empty verification secret" });
     }
+
+    // ---- keys written in the code
+    const hardcodedKey = (arg: ts.Expression | undefined) => {
+      const v = arg ? stringValue(unwrap(arg)) : undefined;
+      return v !== undefined && v.length >= 6 && !isPlaceholder(v) ? v : undefined;
+    };
+    if (/(?:^|\.)createHmac$/.test(name)) {
+      const key = hardcodedKey(args[1]);
+      if (key) this.report(node, "secret/hardcoded-password", { detail: "HMAC key", secret: key });
+    }
+    if (/^(?:jsonwebtoken|jwt)\.(?:sign|verify)$|^(?:sign|verify)$/.test(name) && (this.aliases.get(name.split(".")[0]!) ?? name).startsWith("jsonwebtoken")) {
+      const key = hardcodedKey(args[1]);
+      if (key) this.report(node, "secret/hardcoded-password", { severity: "high", detail: "JWT signing secret", secret: key });
+    }
+
+    // ---- CORS that admits any origin
+    if (last === "enableCors" && (!first || this.corsIsOpen(first))) {
+      this.report(node, "js/cors-any-origin", { severity: first && this.corsReflectsWithCredentials(first) ? "high" : undefined, detail: first ? "enableCors({ origin: any })" : "enableCors() with no options" });
+    }
+    if ((name === "cors" || this.aliases.get(name) === "cors") && (!first || this.corsIsOpen(first))) {
+      this.report(node, "js/cors-any-origin", { severity: first && this.corsReflectsWithCredentials(first) ? "high" : undefined, detail: first ? "cors({ origin: any })" : "cors() with no options" });
+    }
+    if (/^(?:setHeader|header|set|append)$/.test(last) && stringValue(first)?.toLowerCase() === "access-control-allow-origin" && stringValue(args[1]) === "*") {
+      this.report(node, "js/cors-any-origin", { detail: "Access-Control-Allow-Origin: *" });
+    }
+  }
+
+  /** `{ origin: "*" }` or `{ origin: true }` (reflects any origin). */
+  private corsIsOpen(arg: ts.Expression): boolean {
+    const e = unwrap(arg);
+    if (!ts.isObjectLiteralExpression(e)) return false;
+    const origin = objectProp(e, "origin");
+    if (!origin) return true; // options without origin: the default is "*"
+    const o = unwrap(origin);
+    return stringValue(o) === "*" || o.kind === ts.SyntaxKind.TrueKeyword;
+  }
+
+  private corsReflectsWithCredentials(arg: ts.Expression): boolean {
+    const e = unwrap(arg);
+    if (!ts.isObjectLiteralExpression(e)) return false;
+    const origin = objectProp(e, "origin");
+    const creds = objectProp(e, "credentials");
+    return Boolean(origin && unwrap(origin).kind === ts.SyntaxKind.TrueKeyword && creds && unwrap(creds).kind === ts.SyntaxKind.TrueKeyword);
   }
 
   /**

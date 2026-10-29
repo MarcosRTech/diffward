@@ -1,0 +1,8 @@
+{
+  // ruleid: secret/hardcoded-password
+  "apiKey": "Lm4Qz8Vx2Tk7Rw3Pn9Hb6Jc1",
+  // ok: secret/hardcoded-password
+  "apiKeyHeader": "x-api-key",
+  // ok: secret/hardcoded-password
+  "passwordMinLength": "12"
+}

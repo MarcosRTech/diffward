@@ -1,0 +1,12 @@
+service: billing
+env:
+  # ruleid: secret/hardcoded-password
+  client_secret: Tq8Wm3Zx6Kb1Rv9Np4Lc7Hd2
+  # ok: secret/hardcoded-password
+  client_secret: ${{ secrets.CLIENT_SECRET }}
+  # ok: secret/hardcoded-password
+  token_ttl: 3600
+  # ruleid: secret/jwt
+  service_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyIiwicm9sZSI6ImFkbWluIiwiZXhwIjo0MTAyNDQ0ODAwfQ.iB0MW5wA1TpLsAGD63Dx2XVpi7CMqTvmdEX0zijP5Dw
+  # ruleid: secret/jwt low
+  old_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyIiwiZXhwIjoxNjAwMDAwMDAwfQ.IU_TVlQQ6Dc1OZmbD_hLKyAj6oJXcPhs4UFIr-8OoF0

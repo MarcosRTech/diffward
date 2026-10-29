@@ -33,14 +33,21 @@ function expectations(text: string) {
   return { want, ok, severities };
 }
 
+/** Fixture files under a directory, as paths relative to it (fixtures can live in .github/workflows/...). */
+function walk(dir: string, prefix = ""): string[] {
+  return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(dir, join(prefix, e.name)) : [join(prefix, e.name)],
+  );
+}
+
 for (const lang of readdirSync(ROOT)) {
   describe(`${lang} rules`, () => {
-    for (const file of readdirSync(join(ROOT, lang))) {
+    for (const file of walk(join(ROOT, lang))) {
       test(file, () => {
         const text = readFileSync(join(ROOT, lang, file), "utf8");
         const { want, ok, severities } = expectations(text);
         // quality-*.ext fixtures cover quality rules, the others security rules.
-        const category = file.startsWith("quality-") ? "quality" : "security";
+        const category = /(?:^|\/)quality-/.test(file) ? "quality" : "security";
         const findings = scanCode(`${lang}/${file}`, text).filter((f) => f.category === category);
         const got = findings.map((f) => `${f.ruleId}@${f.line}`);
         const gotSeverity = findings.map((f) => `${f.ruleId}@${f.line}:${f.severity}`);

