@@ -51,13 +51,25 @@ function paint(rgb, ch) {
   return ch
 }'
 
-# Prints stdin with a horizontal gradient (the logo).
+# Prints stdin with a horizontal gradient (the logo). awk runs in the C locale
+# (byte mode in every awk) and glues each UTF-8 character back together before
+# coloring it: splitting multi-byte characters would print garbage.
 gradient_text() {
   if [ "$COLOR" = 0 ]; then cat; return; fi
-  awk -v color="$COLOR" "$FX_AWK"'
-    { out = ""; n = length($0)
-      for (i = 1; i <= n; i++) { ch = substr($0, i, 1); if (ch == " ") { out = out " "; continue }
-        grad(i / 75, rgb); out = out paint(rgb, ch) }
+  LC_ALL=C awk -v color="$COLOR" "$FX_AWK"'
+    BEGIN { for (b = 128; b < 256; b++) ord[sprintf("%c", b)] = b }
+    { out = ""; n = length($0); col = 0
+      for (i = 1; i <= n; i++) {
+        ch = substr($0, i, 1)
+        if ((ch in ord) && ord[ch] >= 192) {
+          j = i + 1
+          while (j <= n && (substr($0, j, 1) in ord) && ord[substr($0, j, 1)] < 192) j++
+          ch = substr($0, i, j - i); i = j - 1
+        }
+        col++
+        if (ch == " ") { out = out " "; continue }
+        grad(col / 75, rgb); out = out paint(rgb, ch)
+      }
       printf "%s\033[0m\n", out }'
 }
 
