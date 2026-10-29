@@ -1,5 +1,6 @@
 import type { Package, Severity } from "../types.ts";
 import { cvss3BaseScore, severityFromLabel, severityFromScore } from "./cvss.ts";
+import type { OsvCache } from "./osv-cache.ts";
 
 export const DEFAULT_OSV_URL = "https://api.osv.dev";
 
@@ -29,18 +30,33 @@ interface OsvRecord {
   }[];
 }
 
+export interface OsvProgress {
+  phase: "query" | "advisories";
+  done: number;
+  total: number;
+  /** Advisories served from the on-disk cache so far. */
+  cached?: number;
+}
+
 export interface OsvClient {
   /** For each package, the vulnerabilities affecting that exact version. */
-  scan(packages: Package[]): Promise<Vulnerability[][]>;
+  scan(packages: Package[], onProgress?: (p: OsvProgress) => void): Promise<Vulnerability[][]>;
 }
 
 const BATCH_SIZE = 1000;
-const CONCURRENCY = 8;
+const CONCURRENCY = 32;
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export function createOsvClient(baseUrl = DEFAULT_OSV_URL, fetchImpl: typeof fetch = fetch): OsvClient {
+export function createOsvClient(
+  baseUrl = DEFAULT_OSV_URL,
+  fetchImpl: typeof fetch = fetch,
+  opts: { cache?: OsvCache } = {},
+): OsvClient {
   const base = baseUrl.replace(/\/+$/, "");
   const records = new Map<string, Promise<OsvRecord | null>>();
+  /** `modified` per advisory id, as reported by querybatch: the cache key. */
+  const modifiedOf = new Map<string, string>();
+  let cachedHits = 0;
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let lastError: unknown;
@@ -66,29 +82,60 @@ export function createOsvClient(baseUrl = DEFAULT_OSV_URL, fetchImpl: typeof fet
   function record(id: string): Promise<OsvRecord | null> {
     let p = records.get(id);
     if (!p) {
-      p = request<OsvRecord | null>(`/v1/vulns/${encodeURIComponent(id)}`);
+      const modified = modifiedOf.get(id);
+      const hit = opts.cache?.get(id, modified) as OsvRecord | undefined;
+      if (hit) {
+        cachedHits++;
+        p = Promise.resolve(hit);
+      } else {
+        p = request<OsvRecord | null>(`/v1/vulns/${encodeURIComponent(id)}`).then((rec) => {
+          if (rec) opts.cache?.set(id, modified, rec);
+          return rec;
+        });
+      }
       records.set(id, p);
     }
     return p;
   }
 
   return {
-    async scan(packages) {
+    async scan(packages, onProgress) {
+      // All batches in parallel: each is one request of up to 1000 packages.
+      const chunks: Package[][] = [];
+      for (let i = 0; i < packages.length; i += BATCH_SIZE) chunks.push(packages.slice(i, i + BATCH_SIZE));
+      let batchesDone = 0;
+      onProgress?.({ phase: "query", done: 0, total: packages.length });
+      const responses = await Promise.all(
+        chunks.map(async (chunk) => {
+          const body = {
+            queries: chunk.map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version })),
+          };
+          const res = await request<{ results: { vulns?: { id: string; modified?: string }[] }[] }>("/v1/querybatch", {
+            method: "POST",
+            body: JSON.stringify(body),
+          });
+          batchesDone++;
+          onProgress?.({ phase: "query", done: Math.min(batchesDone * BATCH_SIZE, packages.length), total: packages.length });
+          return res;
+        }),
+      );
       const idsPerPackage: string[][] = [];
-      for (let i = 0; i < packages.length; i += BATCH_SIZE) {
-        const chunk = packages.slice(i, i + BATCH_SIZE);
-        const body = {
-          queries: chunk.map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version })),
-        };
-        const res = await request<{ results: { vulns?: { id: string }[] }[] }>("/v1/querybatch", {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-        for (const r of res.results) idsPerPackage.push((r.vulns ?? []).map((v) => v.id));
+      for (const res of responses) {
+        for (const r of res.results) {
+          for (const v of r.vulns ?? []) if (v.modified) modifiedOf.set(v.id, v.modified);
+          idsPerPackage.push((r.vulns ?? []).map((v) => v.id));
+        }
       }
 
       const allIds = [...new Set(idsPerPackage.flat())];
-      await mapLimit(allIds, CONCURRENCY, record);
+      let fetched = 0;
+      onProgress?.({ phase: "advisories", done: 0, total: allIds.length, cached: 0 });
+      await mapLimit(allIds, CONCURRENCY, async (id) => {
+        const rec = await record(id);
+        fetched++;
+        onProgress?.({ phase: "advisories", done: fetched, total: allIds.length, cached: cachedHits });
+        return rec;
+      });
 
       const out: Vulnerability[][] = [];
       for (let i = 0; i < packages.length; i++) {

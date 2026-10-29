@@ -24,7 +24,8 @@ jobs:
           mkdir -p out
           for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
             ext=""; [ "$target" = "windows-x64" ] && ext=".exe"
-            bun build src/cli.ts --compile --minify --target="bun-$target" --outfile "out/diffward-$target$ext"
+            # worker.ts is a second entrypoint: the code analysis runs on worker threads
+            bun build src/cli.ts src/code/worker.ts --compile --minify --target="bun-$target" --outfile "out/diffward-$target$ext"
           done
           cp install.sh install.ps1 out/
           cd out && sha256sum diffward-* install.sh install.ps1 > SHA256SUMS

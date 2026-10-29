@@ -106,22 +106,64 @@ try {
   $buffer = New-Object byte[] 262144
   $done = [long]0
   $watch = [Diagnostics.Stopwatch]::StartNew()
-  $lastDraw = -1
   $width = 30
   # CI logs turn every `r redraw into a new line: print a line every 25% there instead.
   $interactive = -not [Console]::IsOutputRedirected -and -not $env:CI
   $nextMilestone = 25
+  # Gradient bar with a travelling glint on consoles that understand ANSI (Windows Terminal,
+  # VS Code, PowerShell 7); a plain [###---] bar elsewhere. Glyphs are built from code points
+  # so this file stays ASCII.
+  $vt = $interactive -and -not $env:NO_COLOR -and ($Host.UI.SupportsVirtualTerminal -or $env:WT_SESSION -or $env:TERM_PROGRAM)
+  $esc = [string][char]27
+  $glyphFull = [string][char]0x2501
+  $glyphEmpty = [string][char]0x2500
+  $glyphHead = [string][char]0x2578
+  $spinner = @(0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F) | ForEach-Object { [string][char]$_ }
+  $stops = @(@(0, 229, 255), @(64, 140, 255), @(168, 85, 247), @(255, 64, 160), @(0, 229, 255))
+  $frame = 0
+  $lastFrameAt = -1000
+  function Get-Gradient([double]$t) {
+    $t = $t - [Math]::Floor($t)
+    $seg = $t * 4; $i = [int][Math]::Floor($seg); $k = $seg - $i
+    $a = $stops[$i]; $b = $stops[$i + 1]
+    @(([int]($a[0] + ($b[0] - $a[0]) * $k)), ([int]($a[1] + ($b[1] - $a[1]) * $k)), ([int]($a[2] + ($b[2] - $a[2]) * $k)))
+  }
   try {
     while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
       $file.Write($buffer, 0, $read)
       $done += $read
       $pct = if ($total -gt 0) { [int][Math]::Floor($done * 100 / $total) } else { 0 }
-      if ($interactive -and $pct -ne $lastDraw) {
-        $lastDraw = $pct
+      $now = $watch.ElapsedMilliseconds
+      if ($interactive -and ($now - $lastFrameAt -ge 60 -or $pct -eq 100)) {
+        $lastFrameAt = $now
+        $frame++
         $filled = [int][Math]::Floor($pct * $width / 100)
-        $speed = if ($watch.Elapsed.TotalSeconds -gt 0) { "  " + (Format-Size ($done / $watch.Elapsed.TotalSeconds)) + "/s" } else { "" }
-        $bar = ("#" * $filled).PadRight($width, "-")
-        Write-Host ("`r      [{0}] {1,3}%  {2} / {3}{4}   " -f $bar, $pct, (Format-Size $done), (Format-Size $total), $speed) -NoNewline
+        $seconds = $watch.Elapsed.TotalSeconds
+        $rate = if ($seconds -gt 0) { $done / $seconds } else { 0 }
+        $speed = if ($rate -gt 0) { "  " + (Format-Size $rate) + "/s" } else { "" }
+        $eta = if ($rate -gt 0 -and $total -gt $done) { "  eta {0:N0}s" -f (($total - $done) / $rate) } else { "" }
+        if ($vt) {
+          $glint = ($frame * 1.4) % ($filled + 8) - 4
+          $sb = New-Object Text.StringBuilder
+          for ($i = 0; $i -lt $width; $i++) {
+            if ($i -lt $filled) {
+              $c = Get-Gradient ($i / $width * 0.8 + $frame * 0.02)
+              $d = [Math]::Abs($i - $glint)
+              if ($d -lt 3) { $k = (3 - $d) / 3.2; $c = $c | ForEach-Object { [int]($_ + (255 - $_) * $k) } }
+              [void]$sb.Append("$esc[38;2;$($c[0]);$($c[1]);$($c[2])m$glyphFull")
+            } elseif ($i -eq $filled -and $pct -lt 100) {
+              $c = Get-Gradient ($frame * 0.03)
+              [void]$sb.Append("$esc[38;2;$($c[0]);$($c[1]);$($c[2])m$glyphHead")
+            } else {
+              [void]$sb.Append("$esc[2m$glyphEmpty$esc[0m")
+            }
+          }
+          $lead = if ($pct -ge 100) { "$esc[32m" + [string][char]0x2714 + "$esc[0m" } else { "$esc[36m" + $spinner[$frame % $spinner.Count] + "$esc[0m" }
+          Write-Host ("`r      {0} {1}$esc[0m $esc[1m{2,3}%$esc[0m  {3} / {4}{5}$esc[2m{6}$esc[0m$esc[K" -f $lead, $sb.ToString(), $pct, (Format-Size $done), (Format-Size $total), $speed, $eta) -NoNewline
+        } else {
+          $bar = ("#" * $filled).PadRight($width, "-")
+          Write-Host ("`r      [{0}] {1,3}%  {2} / {3}{4}{5}   " -f $bar, $pct, (Format-Size $done), (Format-Size $total), $speed, $eta) -NoNewline
+        }
       } elseif (-not $interactive -and $pct -ge $nextMilestone -and $nextMilestone -lt 100) {
         Write-Info "" ("{0}% ({1} / {2})" -f $nextMilestone, (Format-Size $done), (Format-Size $total))
         $nextMilestone += 25

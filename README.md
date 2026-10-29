@@ -240,6 +240,19 @@ Full list with CWE and fix guidance: [docs/rules.md](docs/rules.md) or `diffward
 | `1` | A security finding or production dependency at/above `--fail-on` (default `high`), a quality finding at/above `--fail-on-quality` (default `none`), or a dev dependency when `--fail-on-dev` is set |
 | `2` | Usage error, unreadable config, git error, or OSV unreachable |
 
+## Speed
+
+A full scan of a 14,000-file TypeScript monorepo with 4,000 locked packages takes about 3–4 s on a laptop once the advisory cache is warm (about 7 s cold). How:
+
+- **Code and dependencies run at the same time**: analysis is CPU-bound, the OSV lookup is network-bound.
+- **Code analysis uses every core** through worker threads (up to 8); small scans and the Node.js bundle run on one thread.
+- **OSV lookups are batched and parallel** (all `querybatch` pages at once, 32 advisory fetches in flight).
+- **Advisories are cached on disk** in `~/.cache/diffward` (`DIFFWARD_CACHE_DIR` to move it, `--no-cache` to skip it). An entry is reused only while OSV reports the same `modified` date for it, so the cache is never staler than the API. The GitHub Action keeps this cache between runs.
+- **Secrets are pre-filtered per line**: only lines that could contain a credential go through the full set of patterns.
+- In `--diff` mode only the changed files and the new or updated packages are looked at, which usually takes well under a second.
+
+On an interactive terminal diffward shows a live display while it works: the file being analyzed, OSV progress (with how many advisories came from the cache) and finding counters by severity. It is drawn on stderr and erased before the report, so `--format json > out.json` stays clean; it never appears in CI or when output is piped. `--no-progress` turns it off.
+
 ## Adopting on an existing project
 
 A first full scan of an old codebase can list hundreds of findings. Record them once and commit the file:
@@ -307,6 +320,8 @@ diffward baseline [path]  Record current findings so only new ones are reported
   --fail-on-dev           Count dev-only dependencies against --fail-on
   --config <file>         Config file (default: <repo>/.diffward.json)
   --osv-url <url>         OSV API base URL (env DIFFWARD_OSV_URL)
+  --no-cache              Don't read or write the advisory cache (env DIFFWARD_CACHE_DIR moves it)
+  --no-progress           Hide the live progress display
   --list-rules            Print the code rules
   --no-color, -v/--version, -h/--help
 ```

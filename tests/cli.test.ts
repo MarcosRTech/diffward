@@ -17,7 +17,7 @@ async function run(args: string[], opts: { cwd?: string; input?: string; osvUrl?
     stdin: opts.input !== undefined ? new TextEncoder().encode(opts.input) : "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, DIFFWARD_OSV_URL: opts.osvUrl ?? server.url.href, NO_COLOR: "1" },
+    env: { ...process.env, DIFFWARD_OSV_URL: opts.osvUrl ?? server.url.href, DIFFWARD_CACHE_DIR: join(tmpdir(), `diffward-cache-${process.pid}`), NO_COLOR: "1" },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),

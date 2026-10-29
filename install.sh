@@ -24,14 +24,68 @@ else
   BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; CYAN=""; RESET=""
 fi
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
-  *UTF-8* | *utf8* | *UTF8* | *utf-8*) FULL="█"; EMPTY="░"; OK="✔"; ERR="✖"; WARN="!"; DOT="·" ;;
-  *) FULL="#"; EMPTY="-"; OK="ok"; ERR="x"; WARN="!"; DOT="-" ;;
+  *UTF-8* | *utf8* | *UTF8* | *utf-8*) UTF8=1; FULL="━"; EMPTY="─"; OK="✔"; ERR="✖"; WARN="!"; DOT="·" ;;
+  *) UTF8=0; FULL="#"; EMPTY="-"; OK="ok"; ERR="x"; WARN="!"; DOT="-" ;;
 esac
+# 0 = no color, 1 = 256 colors, 2 = 24-bit
+COLOR=0
+if [ -n "$BOLD" ]; then
+  COLOR=1
+  case "${COLORTERM:-}:${TERM_PROGRAM:-}:${WT_SESSION:+wt}" in
+    *truecolor* | *24bit* | *iTerm* | *WezTerm* | *vscode* | *ghostty* | *WarpTerminal* | *:wt) COLOR=2 ;;
+  esac
+fi
+
+# Shared awk helper: colors along a cyan → blue → violet → magenta gradient.
+FX_AWK='
+function stop(i, c) { split("0,229,255 64,140,255 168,85,247 255,64,160 0,229,255", s, " "); split(s[i], c, ","); }
+function grad(t, rgb,   seg, i, a, b, k) {
+  t = t - int(t); if (t < 0) t += 1
+  seg = t * 4; i = int(seg) + 1; k = seg - int(seg)
+  stop(i, a); stop(i + 1, b)
+  rgb[1] = int(a[1] + (b[1] - a[1]) * k); rgb[2] = int(a[2] + (b[2] - a[2]) * k); rgb[3] = int(a[3] + (b[3] - a[3]) * k)
+}
+function paint(rgb, ch) {
+  if (color == 2) return sprintf("\033[38;2;%d;%d;%dm%s", rgb[1], rgb[2], rgb[3], ch)
+  if (color == 1) return sprintf("\033[38;5;%dm%s", 16 + 36 * int(rgb[1] / 51.2) + 6 * int(rgb[2] / 51.2) + int(rgb[3] / 51.2), ch)
+  return ch
+}'
+
+# Prints stdin with a horizontal gradient (the logo).
+gradient_text() {
+  if [ "$COLOR" = 0 ]; then cat; return; fi
+  awk -v color="$COLOR" "$FX_AWK"'
+    { out = ""; n = length($0)
+      for (i = 1; i <= n; i++) { ch = substr($0, i, 1); if (ch == " ") { out = out " "; continue }
+        grad(i / 75, rgb); out = out paint(rgb, ch) }
+      printf "%s\033[0m\n", out }'
+}
+
+SPIN_UTF="⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏"
+SPIN_ASCII="| / - \\"
+spin_frame() { # n → one spinner glyph
+  if [ "$UTF8" = 1 ]; then set -- "$1" $SPIN_UTF; else set -- "$1" $SPIN_ASCII; fi
+  n=$(( $1 % ($# - 1) + 2 )); eval "printf '%s' \"\${$n}\""
+}
+
+# Runs a command in the background with an animated spinner and label.
+with_spinner() { # label cmd...
+  label=$1; shift
+  if [ "$INTERACTIVE" != 1 ]; then "$@"; return; fi
+  "$@" & pid=$!
+  n=0; hide_cursor
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r      %s%s%s %s%s%s\033[K' "$CYAN" "$(spin_frame $n)" "$RESET" "$DIM" "$label" "$RESET"
+    n=$((n + 1)); sleep 0.08
+  done
+  printf '\r\033[K'; show_cursor
+  wait "$pid"
+}
 
 banner() {
-  printf '%s' "$CYAN"
-  if [ "$FULL" = "█" ]; then
-    cat <<'LOGO'
+  [ "$COLOR" = 0 ] && printf '%s' "$CYAN"
+  if [ "$UTF8" = 1 ]; then
+    gradient_text <<'LOGO'
 ██████╗ ██╗███████╗███████╗██╗    ██╗ █████╗ ██████╗ ██████╗
 ██╔══██╗██║██╔════╝██╔════╝██║    ██║██╔══██╗██╔══██╗██╔══██╗
 ██║  ██║██║█████╗  █████╗  ██║ █╗ ██║███████║██████╔╝██║  ██║
@@ -131,7 +185,8 @@ resolve_version() {
     VERSION_NOTE="pinned"
     BASE="https://github.com/$REPO/releases/download/$VERSION"
   else
-    location=$(curl -fsSI "https://github.com/$REPO/releases/latest" | tr -d '\r' | awk 'tolower($1) == "location:" { print $2 }' | tail -n 1)
+    with_spinner "finding the latest release" fetch_latest || true
+    location=$(tr -d '\r' <"$TMP/latest.headers" 2>/dev/null | awk 'tolower($1) == "location:" { print $2 }' | tail -n 1)
     VERSION=${location##*/}
     [ -n "$VERSION" ] || fail "Could not find the latest release." "Check your connection, or set DIFFWARD_VERSION=v0.2.0."
     VERSION_NOTE="latest"
@@ -139,29 +194,47 @@ resolve_version() {
   fi
 }
 
+fetch_latest() { curl -fsSI "https://github.com/$REPO/releases/latest" >"$TMP/latest.headers"; }
+
 current_version() {
   if [ -x "$INSTALL_DIR/diffward" ]; then "$INSTALL_DIR/diffward" --version 2>/dev/null || true; fi
 }
 
-draw_bar() { # done total elapsed_seconds
-  done_b=$1; total=$2; elapsed=$3
-  width=30
+draw_bar() { # done total elapsed_seconds frame
+  done_b=$1; total=$2; elapsed=$3; frame=${4:-0}
   if [ "$total" -gt 0 ]; then
     pct=$((done_b * 100 / total)); [ "$pct" -gt 100 ] && pct=100
-    filled=$((pct * width / 100))
   else
-    pct=0; filled=0
+    pct=0
   fi
-  bar=""
-  i=0; while [ $i -lt $filled ]; do bar="$bar$FULL"; i=$((i + 1)); done
-  rest=""
-  while [ $i -lt $width ]; do rest="$rest$EMPTY"; i=$((i + 1)); done
-  speed=""
-  if [ "$elapsed" -gt 0 ]; then speed="  $(human $((done_b / elapsed)))/s"; fi
+  # Gradient bar with a bright glint travelling along the filled part.
+  bar=$(awk -v pct="$pct" -v f="$frame" -v w=32 -v color="$COLOR" -v full="$FULL" -v empty="$EMPTY" "$FX_AWK"'
+    BEGIN {
+      filled = int(pct * w / 100); glint = (f * 1.4) % (filled + 8) - 4; out = ""
+      for (i = 0; i < w; i++) {
+        if (i < filled) {
+          grad(i / w * 0.8 + f * 0.02, rgb)
+          d = i - glint; if (d < 0) d = -d
+          if (d < 3) { k = (3 - d) / 3.2; for (j = 1; j <= 3; j++) rgb[j] = int(rgb[j] + (255 - rgb[j]) * k) }
+          out = out paint(rgb, full)
+        } else if (i == filled && pct < 100) {
+          grad(f * 0.03, rgb); out = out paint(rgb, (full == "━" ? "╸" : ">"))
+        } else {
+          out = out (color ? "\033[2m" : "") empty (color ? "\033[0m" : "")
+        }
+      }
+      printf "%s\033[0m", out
+    }')
+  speed=""; eta=""
+  if [ "$elapsed" -gt 0 ] && [ "$done_b" -gt 0 ]; then
+    rate=$((done_b / elapsed)); speed="  $(human "$rate")/s"
+    [ "$total" -gt "$done_b" ] && [ "$rate" -gt 0 ] && eta="  ${DIM}eta $(((total - done_b) / rate))s${RESET}"
+  fi
+  if [ "$pct" -ge 100 ]; then lead="${GREEN}${OK}${RESET}"; else lead="${CYAN}$(spin_frame "$frame")${RESET}"; fi
   if [ "$total" -gt 0 ]; then
-    printf '\r      %s%s%s%s%s %3d%%  %s / %s%s\033[K' "$GREEN" "$bar" "$DIM" "$rest" "$RESET" "$pct" "$(human "$done_b")" "$(human "$total")" "$speed"
+    printf '\r      %s %s %s%3d%%%s  %s / %s%s%s\033[K' "$lead" "$bar" "$BOLD" "$pct" "$RESET" "$(human "$done_b")" "$(human "$total")" "$speed" "$eta"
   else
-    printf '\r      %s  %s%s\033[K' "$(human "$done_b")" "downloaded" "$speed"
+    printf '\r      %s %s  %s downloaded%s\033[K' "$lead" "$bar" "$(human "$done_b")" "$speed"
   fi
 }
 
@@ -179,10 +252,12 @@ download() {
 
   if [ "$INTERACTIVE" = 1 ]; then
     hide_cursor
+    frame=0
     while kill -0 "$CURL_PID" 2>/dev/null; do
       size=$(file_size "$out")
-      draw_bar "${size:-0}" "$total" $(($(date +%s) - start))
-      sleep 0.1
+      draw_bar "${size:-0}" "$total" $(($(date +%s) - start)) "$frame"
+      frame=$((frame + 1))
+      sleep 0.06
     done
   else
     # CI logs: a line every 25% instead of a redrawn bar.
@@ -205,7 +280,7 @@ download() {
   size=$(wc -c <"$out" | tr -d ' ')
   elapsed=$(($(date +%s) - start))
   if [ "$INTERACTIVE" = 1 ]; then
-    draw_bar "$size" "${total:-$size}" "$elapsed"
+    draw_bar "$size" "${total:-$size}" "$elapsed" 0
     printf '\n'
     show_cursor
   fi
@@ -215,17 +290,18 @@ download() {
 
 verify() {
   sums="$TMP/SHA256SUMS"
-  curl -fsSL -o "$sums" "$BASE/SHA256SUMS" || fail "Could not download SHA256SUMS for $VERSION."
+  with_spinner "fetching SHA256SUMS" curl -fsSL -o "$sums" "$BASE/SHA256SUMS" || fail "Could not download SHA256SUMS for $VERSION."
   expected=$(awk -v a="$ASSET" '$2 == a { print $1 }' "$sums")
   [ -n "$expected" ] || fail "No checksum for $ASSET in SHA256SUMS."
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "$TMP/$ASSET" | awk '{ print $1 }')
-  else
-    actual=$(shasum -a 256 "$TMP/$ASSET" | awk '{ print $1 }')
-  fi
+  with_spinner "hashing $(human "$(file_size "$TMP/$ASSET")")" hash_file "$TMP/$ASSET" "$TMP/actual.sha256"
+  actual=$(cat "$TMP/actual.sha256")
   [ "$actual" = "$expected" ] || fail "Checksum mismatch: the download is corrupted or was tampered with." "expected $expected, got $actual"
   SHORT_SUM="$(printf '%s' "$actual" | cut -c1-8)…$(printf '%s' "$actual" | cut -c57-64)"
   info "SHA-256" "$SHORT_SUM ${GREEN}$OK${RESET}"
+}
+
+hash_file() { # file out
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{ print $1 }' >"$2"
 }
 
 install_binary() {
@@ -270,6 +346,8 @@ need curl
 need uname
 banner
 
+TMP=$(mktemp -d 2>/dev/null || mktemp -d -t diffward)
+
 step 1 "Detecting your system"
 detect_platform
 resolve_version
@@ -285,7 +363,6 @@ if [ -n "$PREVIOUS" ]; then
   fi
 fi
 
-TMP=$(mktemp -d 2>/dev/null || mktemp -d -t diffward)
 
 printf '\n'
 step 2 "Downloading"

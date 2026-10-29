@@ -40,6 +40,13 @@ const URL_PARAM = /[?&]([A-Za-z_][\w-]*)=([^&\s"'#<>`)]{16,})/g;
 const AUTH_HEADER = /Authorization["']?\s*[:=]\s*["']?(Bearer|Basic|Token)\s+([A-Za-z0-9._~+/=-]{16,})/i;
 const JWT = /\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,})/;
 
+/**
+ * Cheap pre-check run once per line: a line that matches none of these can't
+ * match any rule below, so most source lines skip the ~25 regexes entirely.
+ */
+const MAYBE_SECRET =
+  /AKIA|ASIA|gh[pousr]_|github_pat_|glpat-|xox[abposr]-|hooks\.slack|_live_|AIza|T3BlbkFJ|sk-ant-|npm_|SG\.|SK[0-9a-f]{8}|key-[0-9a-f]|:AA|webhooks\/|:\/\/|BEGIN|eyJ|uthorization|pass|pwd|secret|token|key|credential|auth/i;
+
 const PLACEHOLDER =
   /^(?:x+|\*+|\.+|-+)$|change.?me|example|placeholder|your[_-]|<|>|\$\{|\{\{|%\(|redacted|dummy|sample|fake|mock|todo|xxxx|\*\*\*|^(?:password|secret|test|null|none|undefined|true|false)\d*$/i;
 
@@ -121,7 +128,7 @@ export function scanSecrets(text: string, opts: { scope: SecretScope }): RawFind
   const { scope } = opts;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    if (line.length > 4000) continue; // minified / generated
+    if (line.length > 4000 || !MAYBE_SECRET.test(line)) continue; // minified / nothing secret-like
     const push = (ruleId: string, index: number, extra: Partial<RawFinding>) =>
       out.push({ ruleId, line: i + 1, column: index + 1, ...extra });
 

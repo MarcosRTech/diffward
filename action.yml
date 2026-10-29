@@ -58,6 +58,15 @@ runs:
       shell: bash
       run: cd "$GITHUB_ACTION_PATH" && bun install --frozen-lockfile --production --silent
 
+    # Advisories are reused only while OSV reports the same `modified` date, so a
+    # restored cache is never stale; a new key per run saves what this run fetched.
+    - name: Restore the advisory cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/diffward
+        key: diffward-osv-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: diffward-osv-${{ runner.os }}-
+
     - name: Run diffward
       id: scan
       shell: bash

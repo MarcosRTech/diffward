@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import { scanCode, shouldScanText } from "./code/index.ts";
+import { shouldScanText } from "./code/index.ts";
 import { activeVulnIgnores, type Config } from "./config.ts";
 import { scanDependencies } from "./deps/index.ts";
 import { isLockfile } from "./deps/lockfiles/index.ts";
-import type { OsvClient } from "./deps/osv.ts";
+import type { OsvClient, OsvProgress } from "./deps/osv.ts";
+import { analyzeFiles } from "./code/pool.ts";
 import { diffAgainst, git, gitRoot, parseUnifiedDiff, readFileAtRevision, type ChangedLines } from "./diff.ts";
 import { makeMatcher } from "./glob.ts";
 import { SEVERITIES, severityRank, type Finding } from "./types.ts";
@@ -20,11 +21,20 @@ export interface ScanOptions {
   deps: boolean;
   /** Run quality (bad-practice) rules in addition to security rules. */
   quality: boolean;
+  /** Live progress for interactive output. */
+  onProgress?: (e: ProgressEvent) => void;
   /** "changed": only packages added/updated by the diff. Defaults to "changed" in diff mode. */
   depsScope?: "changed" | "all";
   osv: OsvClient;
   config: Config;
 }
+
+export type ProgressEvent =
+  | { type: "code"; done: number; total: number; file?: string }
+  | { type: "code-done"; files: number }
+  | { type: "finding"; finding: Finding }
+  | ({ type: "deps" } & OsvProgress)
+  | { type: "deps-done"; packages: number; vulnerable: number; lockfiles: number };
 
 export interface ScanResult {
   root: string;
@@ -51,7 +61,6 @@ const ALWAYS_IGNORED = [
   "*.bundle.js",
 ];
 const WALK_IGNORED = ["dist/", "build/", "out/", "coverage/", ".next/", ".nuxt/", ".turbo/", ".cache/", "target/"];
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Test code legitimately disables TLS, uses MD5, builds SQL by hand... Code
@@ -88,32 +97,11 @@ export async function scan(opts: ScanOptions): Promise<ScanResult> {
 
   const findings: Finding[] = [];
   let filesScanned = 0;
+  const emit = opts.onProgress ?? (() => {});
 
-  if (opts.code) {
-    for (const file of files) {
-      if (!shouldScanText(file)) continue;
-      let size: number;
-      try {
-        size = statSync(join(root, file)).size;
-      } catch {
-        continue; // deleted in the working tree
-      }
-      if (size > MAX_FILE_BYTES) continue;
-      filesScanned++;
-      const lines = changed?.get(file);
-      const isTest = !opts.config.includeTests && TEST_PATH.test(file);
-      for (const f of scanCode(file, read(file))) {
-        // Real credentials leak from tests too; generic "password = ..." in tests is almost always fake.
-        if (isTest && f.ruleId !== "secret/known-token" && f.ruleId !== "secret/private-key") continue;
-        if (!opts.quality && f.category === "quality") continue;
-        if (!lines || lines.has(f.line)) findings.push(f);
-      }
-    }
-  }
-
-  let lockfiles: string[] = [];
-  let packagesChecked = 0;
-  if (opts.deps) {
+  // Dependencies are network-bound and code analysis is CPU-bound: run both at once.
+  const depsTask = (async () => {
+    if (!opts.deps) return { lockfiles: [] as string[], packagesChecked: 0, findings: [] as Finding[] };
     const scope = opts.depsScope ?? (changed ? "changed" : "all");
     const candidates = (scope === "changed" && changed ? files : existing).filter(isLockfile);
     const res = await scanDependencies({
@@ -122,18 +110,49 @@ export async function scan(opts: ScanOptions): Promise<ScanResult> {
       allFiles: existing,
       readBase: scope === "changed" && mergeBase ? (f) => readFileAtRevision(root, mergeBase!, f) : undefined,
       osv: opts.osv,
+      onProgress: (p) => emit({ type: "deps", ...p }),
     });
-    lockfiles = res.lockfiles;
-    packagesChecked = res.packagesChecked;
-    for (const f of res.findings) {
+    const kept = res.findings.filter((f) => {
       // With a raw patch there is no base lockfile to compare; keep packages whose entry was touched.
       if (scope === "changed" && changed && !mergeBase) {
         const lines = changed.get(f.file);
-        if (lines && ![0, 1, 2, 3].some((d) => lines.has(f.line + d))) continue;
+        if (lines && ![0, 1, 2, 3].some((d) => lines.has(f.line + d))) return false;
       }
-      findings.push(f);
-    }
-  }
+      return true;
+    });
+    for (const f of kept) emit({ type: "finding", finding: f });
+    emit({ type: "deps-done", packages: res.packagesChecked, vulnerable: kept.length, lockfiles: res.lockfiles.length });
+    return { lockfiles: res.lockfiles, packagesChecked: res.packagesChecked, findings: kept };
+  })();
+
+  const codeTask = (async () => {
+    if (!opts.code) return;
+    const targets = files.filter(shouldScanText);
+    let done = 0;
+    emit({ type: "code", done, total: targets.length });
+    await analyzeFiles(root, targets, (r) => {
+      done++;
+      if (r.scanned) filesScanned++;
+      const lines = changed?.get(r.file);
+      const isTest = !opts.config.includeTests && TEST_PATH.test(r.file);
+      for (const f of r.findings) {
+        // Real credentials leak from tests too; generic "password = ..." in tests is almost always fake.
+        if (isTest && f.ruleId !== "secret/known-token" && f.ruleId !== "secret/private-key") continue;
+        if (!opts.quality && f.category === "quality") continue;
+        if (!lines || lines.has(f.line)) {
+          findings.push(f);
+          emit({ type: "finding", finding: f });
+        }
+      }
+      emit({ type: "code", done, total: targets.length, file: r.file });
+    });
+    emit({ type: "code-done", files: filesScanned });
+  })();
+
+  const [deps] = await Promise.all([depsTask, codeTask]);
+  findings.push(...deps.findings);
+  const lockfiles = deps.lockfiles;
+  const packagesChecked = deps.packagesChecked;
 
   const { kept, suppressed } = applyConfig(findings, opts.config);
   kept.sort(

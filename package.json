@@ -1,6 +1,6 @@
 {
   "name": "diffward",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Security scanner for pull requests: vulnerable dependencies (OSV) and insecure code patterns, scoped to the diff. SARIF output for GitHub Code Scanning.",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/cli.ts --target=node --outfile dist/diffward.js",
-    "build:bin": "bun build src/cli.ts --compile --minify --outfile dist/bin/diffward",
+    "build:bin": "bun build src/cli.ts src/code/worker.ts --compile --minify --outfile dist/bin/diffward",
     "prepublishOnly": "bun run typecheck && bun test && bun run build"
   },
   "dependencies": {

@@ -6,8 +6,11 @@ import { applyBaseline, baselinePath, readBaseline, writeBaseline } from "./base
 import { RULES } from "./code/rules.ts";
 import { loadConfig } from "./config.ts";
 import { createOsvClient, DEFAULT_OSV_URL } from "./deps/osv.ts";
+import { createDiskCache } from "./deps/osv-cache.ts";
 import { gitRoot } from "./diff.ts";
 import { banner, TAGLINE } from "./logo.ts";
+import { createProgressUI, type ProgressUI } from "./ui/progress.ts";
+import { basename, resolve } from "node:path";
 import { failed, type Policy, type Threshold } from "./policy.ts";
 import { toMarkdown } from "./report/markdown.ts";
 import { toSarif } from "./report/sarif.ts";
@@ -40,6 +43,8 @@ Output:
   --markdown <file>       Also write a Markdown summary (PR comment / step summary).
   --json <file>           Also write JSON.
   --no-color              Disable colors (also honors NO_COLOR).
+  --no-progress           Don't show the live progress display (it only appears on
+                          interactive terminals, never in CI or when piped).
 
 Policy:
   --fail-on <severity>    Exit 1 on a security finding at or above: critical | high |
@@ -50,6 +55,7 @@ Policy:
 
 Other:
   --osv-url <url>         OSV API base URL (default: ${DEFAULT_OSV_URL}, env DIFFWARD_OSV_URL).
+  --no-cache              Don't read or write the advisory cache (~/.cache/diffward, env DIFFWARD_CACHE_DIR).
   --list-rules            Print the code rules and exit.
   -v, --version           Print the version.
   -h, --help              Show this help.
@@ -83,11 +89,13 @@ async function main(argv: string[]): Promise<number> {
       markdown: { type: "string" },
       json: { type: "string" },
       "no-color": { type: "boolean" },
+      "no-progress": { type: "boolean" },
       "fail-on": { type: "string" },
       "fail-on-quality": { type: "string" },
       "fail-on-dev": { type: "boolean" },
       config: { type: "string" },
       "osv-url": { type: "string" },
+      "no-cache": { type: "boolean" },
       "list-rules": { type: "boolean" },
       version: { type: "boolean", short: "v" },
       help: { type: "boolean", short: "h" },
@@ -139,17 +147,57 @@ async function main(argv: string[]): Promise<number> {
 
   const diffPatch = values["diff-file"] !== undefined ? readInput(values["diff-file"]) : undefined;
 
+  // Live HUD on stderr: interactive terminals only, so CI logs and pipes stay clean.
+  const interactive = Boolean(process.stderr.isTTY) && !process.env.CI && !values["no-progress"];
+  const runCode = !values["no-code"];
+  const runDeps = !values["no-deps"];
+  let ui: ProgressUI | undefined;
+  if (interactive) {
+    const scope = values.diff ? `changes since ${values.diff}` : values["diff-file"] !== undefined ? "changes from patch" : "full scan";
+    ui = createProgressUI({
+      stream: process.stderr,
+      title: `${VERSION} · ${scope}`,
+      subtitle: `scanning ${basename(resolve(path))}${runDeps ? " · dependencies checked against OSV" : ""}`,
+      code: runCode,
+      deps: runDeps,
+      level: values["no-color"] ? 0 : undefined,
+    });
+  }
+  const started = Date.now();
+  let filesDone = 0;
+  let packagesDone = 0;
+  const onProgress = ui
+    ? (e: Parameters<ProgressUI["onProgress"]>[0]) => {
+        if (e.type === "code-done") filesDone = e.files;
+        if (e.type === "deps-done") packagesDone = e.packages;
+        ui!.onProgress(e);
+      }
+    : undefined;
+
   const result = await scan({
     path,
+    onProgress,
     diffBase: values.diff,
     diffPatch,
-    code: !values["no-code"],
-    deps: !values["no-deps"],
+    code: runCode,
+    deps: runDeps,
     quality: !values["no-quality"] && config.quality !== false,
     depsScope,
-    osv: createOsvClient(values["osv-url"] ?? process.env.DIFFWARD_OSV_URL ?? DEFAULT_OSV_URL),
+    osv: createOsvClient(values["osv-url"] ?? process.env.DIFFWARD_OSV_URL ?? DEFAULT_OSV_URL, fetch, {
+      cache: values["no-cache"] ? undefined : createDiskCache(),
+    }),
     config,
-  });
+  }).then(
+    (r) => {
+      const parts = [runCode ? `${filesDone.toLocaleString("en-US")} files` : "", runDeps ? `${packagesDone.toLocaleString("en-US")} packages` : ""];
+      ui?.stop(`scanned ${parts.filter(Boolean).join(" and ")} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      return r;
+    },
+    (err: unknown) => {
+      ui?.stop();
+      throw err;
+    },
+  );
 
   const blPath = baselinePath(result.root, config.baseline);
   if (command === "baseline") {

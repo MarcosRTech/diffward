@@ -1,6 +1,6 @@
 import type { Finding, Package } from "../types.ts";
 import { parseLockfile, selectLockfiles, type LockedPackage } from "./lockfiles/index.ts";
-import type { OsvClient } from "./osv.ts";
+import type { OsvClient, OsvProgress } from "./osv.ts";
 
 export interface DependencyScanInput {
   /** Lockfiles to check, relative paths. */
@@ -14,6 +14,7 @@ export interface DependencyScanInput {
    */
   readBase?: (file: string) => string | null;
   osv: OsvClient;
+  onProgress?: (p: OsvProgress) => void;
 }
 
 export interface DependencyScanResult {
@@ -58,7 +59,7 @@ export async function scanDependencies(input: DependencyScanInput): Promise<Depe
   const unique = new Map<string, Package>();
   for (const t of targets) unique.set(key(t.pkg), t.pkg);
   const uniqueList = [...unique.values()];
-  const results = await input.osv.scan(uniqueList);
+  const results = await input.osv.scan(uniqueList, input.onProgress);
   const vulnsByKey = new Map(uniqueList.map((p, i) => [key(p), results[i] ?? []]));
 
   const findings: Finding[] = [];
